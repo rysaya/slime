@@ -127,7 +127,6 @@ ray job submit --address="http://127.0.0.1:8265" \
    ${WANDB_ARGS[@]} \
    ${PERF_ARGS[@]} \
    --rollout-buffer-url http://${MASTER_ADDR}:8889 \
-   --keep-old-actor \
    --disable-rewards-normalization \
    --loss-mask-type distill_qwen \
    --log-passrate

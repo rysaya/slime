@@ -81,7 +81,6 @@ class Buffer:
         print(f"import {self.args.eval_function_path} as eval_generate_rollout function.")
 
     def get_num_rollout_per_epoch(self):
-        assert self.args.rollout_global_dataset
         return len(self.data_source.dataset) // self.args.rollout_batch_size
 
     # TODO simplify remaining logic
@@ -152,10 +151,6 @@ class Buffer:
         return Box(ray.put(data))
 
     def eval(self, rollout_id):
-        if self.args.debug_train_only:
-            # if debug train only, we don't generate evaluation data
-            return
-
         data = self.eval_generate_rollout(RolloutFnCallParams(rollout_id=rollout_id)).metrics
         log_eval_data(rollout_id, self.args, data)
 

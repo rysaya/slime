@@ -143,22 +143,25 @@ def _start_router(args):
 
 
 class RolloutManager:
-    def __init__(self, args, pg, wandb_run_id):
+    def __init__(self, args, pg, wandb_run_id, init_gen_engines=True):
         self.args = args
-        _start_router(args)
+        if init_gen_engines:
+            _start_router(self.args)
+            self.all_rollout_engines = create_rollout_engines(self.args, pg)
+            nodes_per_engine = max(1, self.args.rollout_num_gpus_per_engine // self.args.rollout_num_gpus_per_node)
+            # when doing multi-node serving, we will only send request to node-0 for each engine.
+            self.rollout_engines = self.all_rollout_engines[::nodes_per_engine]
+            self.rollout_engine_lock = Lock.options(
+                num_cpus=1,
+                num_gpus=0,
+            ).remote()
+        else:
+            self.rollout_engines = None
+            self.rollout_engine_lock = None
         self.data_buffer = Buffer.options(
             num_cpus=1,
             num_gpus=0,
         ).remote(args, wandb_run_id=wandb_run_id)
-
-        self.all_rollout_engines = create_rollout_engines(args, pg)
-        nodes_per_engine = max(1, args.rollout_num_gpus_per_engine // args.rollout_num_gpus_per_node)
-        # when doing multi-node serving, we will only send request to node-0 for each engine.
-        self.rollout_engines = self.all_rollout_engines[::nodes_per_engine]
-        self.rollout_engine_lock = Lock.options(
-            num_cpus=1,
-            num_gpus=0,
-        ).remote()
 
     def async_generate(self, rollout_id):
         return self.data_buffer.generate.remote(rollout_id)
@@ -167,7 +170,11 @@ class RolloutManager:
         return self.data_buffer.eval.remote(rollout_id)
 
     def async_offload(self):
+        if self.rollout_engines is None:
+            return []
         return [engine.release_memory_occupation.remote() for engine in self.rollout_engines]
 
     def async_onload(self, tags: List[str] = None):
+        if self.rollout_engines is None:
+            return []
         return [engine.resume_memory_occupation.remote(tags=tags) for engine in self.rollout_engines]

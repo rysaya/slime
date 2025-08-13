@@ -80,7 +80,7 @@ def setup_model_and_optimizer(
 
     with (
         CuMemAllocator.get_instance().use_memory_pool(tag="model")
-        if args.offload and torch.version.hip
+        if args.colocate and torch.version.hip
         else nullcontext()
     ):
         config = get_model_config(model[0])

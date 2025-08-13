@@ -59,16 +59,6 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 default=False,
                 help=(
                     "Whether to colocate the inference engines and the actor. "
-                    "Turning this on will also set --offload to true."
-                ),
-            )
-            parser.add_argument(
-                "--offload",
-                action="store_true",
-                default=False,
-                help=(
-                    "Whether to offload the rollout generator and training actor to CPU during training. "
-                    "This will always be true when --colocate is set."
                 ),
             )
 
@@ -96,6 +86,16 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                     "The name of the model, this is used to convert the megatron weights into huggingface format. "
                     "If not set, we will use `type(AutoConfig.from_pretrained(args.hf_checkpoint)).__name__.lower()` as model_name. "
                     "Also, sometimes this will help alleviate the bug that transformers cannot find certain model."
+                ),
+            )
+            parser.add_argument(
+                "--rollout-type",
+                type=str,
+                default="online",
+                choices=["online", "offline"],
+                help=(
+                    "The type of rollout manager, 'online' means the rollout engines are used to generate data, "
+                    "'offline' means the offline data are directly passed to train the model"
                 ),
             )
             parser.add_argument(
@@ -286,17 +286,6 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                     "This is used for updating weights by chunk and should be useful for MoE models."
                 ),
             )
-            parser.add_argument(
-                "--update-weights-interval",
-                type=int,
-                default=1,
-                help="Interval for updating the weights",
-            )
-            parser.add_argument(
-                "--keep-old-actor",
-                action="store_true",
-                help="Whether to keep the rollout model on training process",
-            )
 
             parser.add_argument(
                 "--rollout-data-postprocess-path",
@@ -327,18 +316,6 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                     "Number of epochs for the training. "
                     "This is used to calculate the number of rollout steps from the dataset size. "
                     "If set, we will calculate the number of rollout steps as `num_rollout = num_epoch * dataset_size // rollout_batch_size`."
-                ),
-            )
-
-            parser.add_argument(
-                "--disable-rollout-global-dataset",
-                action="store_false",
-                dest="rollout_global_dataset",
-                help=(
-                    "Whether to use a global dataset for rollout. "
-                    "If set, the rollout will use the `--prompt-data` as the prompt dataset, "
-                    "and the prompts for rollout will be sampled from the dataset. "
-                    "If not set, you need to manage the data by your self."
                 ),
             )
 
@@ -912,15 +889,12 @@ def parse_args(add_custom_arguments=None):
             args.actor_num_gpus_per_node = min(8, args.rollout_num_gpus)
             args.actor_num_nodes = args.rollout_num_gpus // args.actor_num_gpus_per_node
         args.colocate = False
-        args.offload = False
 
     assert not (args.debug_rollout_only and args.debug_train_only), (
         "debug_rollout_only and debug_train_only cannot be set at the same time, " "please set only one of them."
     )
 
-    # always true on offload for colocate at the moment.
     if args.colocate:
-        args.offload = True
         if args.rollout_num_gpus != args.actor_num_gpus_per_node * args.actor_num_nodes:
             print(
                 f"rollout_num_gpus {args.rollout_num_gpus} != actor_num_gpus_per_node {args.actor_num_gpus_per_node} "
@@ -961,11 +935,6 @@ def parse_args(add_custom_arguments=None):
     if args.num_epoch is not None:
         if args.num_rollout is not None:
             print("Both num_epoch and num_rollout are set, num_epoch will be ignored.")
-        else:
-            assert args.rollout_global_dataset, (
-                "num_epoch is set, but rollout_global_dataset is not set, "
-                "please remove --disable-rollout-global-dataset to use num_epoch"
-            )
     else:
         # if num_epoch is not set, we should set num_rollout
         assert args.num_rollout is not None, (

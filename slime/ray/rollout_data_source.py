@@ -19,28 +19,25 @@ class RolloutDataSource:
         # TODO remove this
         self.metadata = {}
 
-        if args.rollout_global_dataset:
-            tokenizer = AutoTokenizer.from_pretrained(args.hf_checkpoint, trust_remote_code=True)
+        tokenizer = AutoTokenizer.from_pretrained(args.hf_checkpoint, trust_remote_code=True)
 
-            # TODO move (during the refactor)
-            if (d := args.dump_details) is not None:
-                tokenizer.save_pretrained(Path(d) / "tokenizer")
+        # TODO move (during the refactor)
+        if (d := args.dump_details) is not None:
+            tokenizer.save_pretrained(Path(d) / "tokenizer")
 
-            self.dataset = Dataset(
-                args.prompt_data,
-                tokenizer=tokenizer,
-                max_length=args.rollout_max_prompt_len,
-                prompt_key=args.input_key,
-                label_key=args.label_key,
-                metadata_key=args.metadata_key,
-                tool_key=args.tool_key,
-                apply_chat_template=args.apply_chat_template,
-                seed=args.rollout_seed,
-            )
-            if self.args.rollout_shuffle:
-                self.dataset.shuffle(self.epoch_id)
-        else:
-            self.dataset = None
+        self.dataset = Dataset(
+            args.prompt_data,
+            tokenizer=tokenizer,
+            max_length=args.rollout_max_prompt_len,
+            prompt_key=args.input_key,
+            label_key=args.label_key,
+            metadata_key=args.metadata_key,
+            tool_key=args.tool_key,
+            apply_chat_template=args.apply_chat_template,
+            seed=args.rollout_seed,
+        )
+        if self.args.rollout_shuffle:
+            self.dataset.shuffle(self.epoch_id)
 
     def get_samples(self, num_samples):
         samples = []
@@ -80,9 +77,6 @@ class RolloutDataSource:
         return samples
 
     def save(self, rollout_id):
-        if not self.args.rollout_global_dataset:
-            return
-
         state_dict = {
             "sample_offset": self.sample_offset,
             "epoch_id": self.epoch_id,
@@ -94,9 +88,6 @@ class RolloutDataSource:
         torch.save(state_dict, path)
 
     def load(self, rollout_id=None):
-        if not self.args.rollout_global_dataset:
-            return
-
         if self.args.load is None:
             return
 
@@ -113,5 +104,5 @@ class RolloutDataSource:
         self.sample_index = state_dict.get("sample_index", 0)
         self.metadata = state_dict.get("metadata", {})
 
-        if self.args.rollout_global_dataset and self.args.rollout_shuffle:
+        if self.args.rollout_shuffle:
             self.dataset.shuffle(self.epoch_id)

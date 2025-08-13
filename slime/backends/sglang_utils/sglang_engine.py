@@ -88,7 +88,7 @@ class SGLangEngine(RayActor):
             "trust_remote_code": True,
             "random_seed": args.seed + rank,
             # memory
-            "enable_memory_saver": args.offload,
+            "enable_memory_saver": args.colocate,
             # distributed
             "host": get_host_info()[1],
             "port": port,
@@ -130,7 +130,7 @@ class SGLangEngine(RayActor):
                 f"http://{self.router_ip}:{self.router_port}/add_worker?url=http://{self.server_args.host}:{self.server_args.port}"
             )
 
-        if self.args.offload:
+        if self.args.colocate:
             # offload the engine to the CPU
             self.release_memory_occupation()
 
