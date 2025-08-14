@@ -31,7 +31,8 @@ def train(args):
     if args.start_rollout_id is None:
         args.start_rollout_id = start_rollout_ids[0]
 
-    ray.get(rollout_manager.data_buffer.load.remote(args.start_rollout_id - 1))
+    if args.load is not None:
+        ray.get(rollout_manager.data_buffer.load.remote(args.start_rollout_id - 1))
 
     if args.colocate:
         ray.get(rollout_manager.async_onload(tags=[GPU_MEMORY_TYPE_WEIGHTS]))
@@ -52,14 +53,11 @@ def train(args):
     for rollout_id in range(args.start_rollout_id, args.num_rollout):
         if args.colocate:
             rollout_data_curr_ref = ray.get(rollout_manager.async_generate(rollout_id))
-            ray.get(rollout_manager.offload())
+            ray.get(rollout_manager.async_offload())
         else:
             rollout_data_curr_ref = ray.get(rollout_data_next_future)
             if rollout_id + 1 < args.num_rollout:
                 rollout_data_next_future = rollout_manager.async_generate(rollout_id + 1)
-
-        if args.colocate:
-            ray.get(rollout_manager.async_offload())
 
         ray.get(actor_model.async_train(rollout_id, rollout_data_curr_ref))
 

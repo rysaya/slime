@@ -119,7 +119,11 @@ def create_actor_group(args, pg, wandb_run_id):
 
 
 def create_rollout_manager(args, pg, actor_model, wandb_run_id):
-    rollout_manager = RolloutManager(args, pg, wandb_run_id=wandb_run_id, init_gen_engines=not args.debug_train_only)
-    if not args.debug_train_only and not args.debug_rollout_only:
+    init_gen_engine = (args.rollout_type == "online" or 
+                       (args.eval_prompt_data is not None and args.eval_interval is not None)
+                       ) and not args.debug_train_only
+
+    rollout_manager = RolloutManager(args, pg, wandb_run_id=wandb_run_id, init_gen_engines=init_gen_engine)
+    if init_gen_engine and not args.debug_rollout_only:
         ray.get(actor_model.async_init_weight_update_connections(rollout_manager))
     return rollout_manager

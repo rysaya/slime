@@ -366,7 +366,6 @@ def _generate_one_step(
 
 # Can use such function-based approach, or use class-based approach
 def create_rollout_fn(params: RolloutFnInitParams):
-    assert params.args.rollout_global_dataset
     state = GenerateState(args=params.args)
     return PartialRolloutFn(
         params=params,

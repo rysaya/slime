@@ -88,9 +88,6 @@ class RolloutDataSource:
         torch.save(state_dict, path)
 
     def load(self, rollout_id=None):
-        if self.args.load is None:
-            return
-
         path = os.path.join(self.args.load, f"rollout/global_dataset_state_dict_{rollout_id}.pt")
         if not os.path.exists(path):
             print(f"Checkpoint {path} does not exist.")

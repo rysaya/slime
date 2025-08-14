@@ -214,19 +214,13 @@ class MegatronTrainRayActor(TrainRayActor):
                         store_prefix="",
                     )
                 )
-                # when there is old actor, we need to update the model params to actor manually
-                if "old_actor" in self.weights:
-                    self.update_gpu_params_dict(self.weights["actor"])
 
                 # Calculate adv and returns. Need to performed before training (instead of on the fly),
                 # because we may need normalize the whole rollout.
                 compute_advantages_and_returns(self.args, rollout_data)
-
             if self.rollout_data_postprocess is not None:
                 self.rollout_data_postprocess(self.args)
-
             log_rollout_data(rollout_id, self.args, rollout_data)
-
             # Train
             with timer("actor_train"):
                 train(
@@ -266,17 +260,14 @@ class MegatronTrainRayActor(TrainRayActor):
             save(iteration, self.model, None, None)
 
     def connect_rollout_engines(self, rollout_engines, rollout_engine_lock):
+        assert rollout_engines is not None, "The rollout_engines must be initialized before connecting."
         self.rollout_engines = rollout_engines
-
-        if self.args.debug_train_only or self.args.debug_rollout_only:
-            return
-
         self.weight_updator.connect_rollout_engines(rollout_engines, rollout_engine_lock)
         dist.barrier(group=get_gloo_group())
 
     @timer
     def update_weights(self):
-        if self.args.debug_train_only or self.args.debug_rollout_only:
+        if self.rollout_engines is None:
             return
 
         if self.args.colocate and hasattr(mpu, "reload_process_groups"):
