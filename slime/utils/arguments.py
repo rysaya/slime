@@ -268,12 +268,6 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 ),
             )
             parser.add_argument(
-                "--update-weights-interval",
-                type=int,
-                default=1,
-                help="Interval for updating the weights",
-            )
-            parser.add_argument(
                 "--keep-old-actor",
                 action="store_true",
                 help="Whether to keep the rollout model on training process",
