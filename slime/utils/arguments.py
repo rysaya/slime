@@ -90,16 +90,6 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 ),
             )
             parser.add_argument(
-                "--rollout-type",
-                type=str,
-                default="online",
-                choices=["online", "offline"],
-                help=(
-                    "The type of rollout manager, 'online' means the rollout engines are used to generate data, "
-                    "'offline' means the offline data are directly passed to train the model"
-                ),
-            )
-            parser.add_argument(
                 "--rollout-function-path",
                 type=str,
                 default="slime.rollout.sglang_rollout.generate_rollout",
