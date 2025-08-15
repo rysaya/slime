@@ -218,9 +218,12 @@ class MegatronTrainRayActor(TrainRayActor):
                 # Calculate adv and returns. Need to performed before training (instead of on the fly),
                 # because we may need normalize the whole rollout.
                 compute_advantages_and_returns(self.args, rollout_data)
+
             if self.rollout_data_postprocess is not None:
                 self.rollout_data_postprocess(self.args)
+
             log_rollout_data(rollout_id, self.args, rollout_data)
+
             # Train
             with timer("actor_train"):
                 train(

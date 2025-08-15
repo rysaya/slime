@@ -117,7 +117,6 @@ def create_actor_group(args, pg, wandb_run_id):
     )
     return actor_model
 
-
 def create_rollout_manager(args, pg, actor_model, wandb_run_id):
     init_gen_engine = (args.rollout_type == "online" or 
                        (args.eval_prompt_data is not None and args.eval_interval is not None)
