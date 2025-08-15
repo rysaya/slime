@@ -271,7 +271,7 @@ This will trigger FP8 inference. Currently, we directly cast the BF16 weights to
 
 ⚠️ The Megatron checkpoint for training still needs to be the one that was originally converted from the BF16 Hugging Face model.
 
-### Decoupled Training and Inference
+### Decoupled Training and Inference, Asynchronous Training
 
 In the original script, the resource configuration is as follows:
 
@@ -299,6 +299,8 @@ ray job submit ... \
 
 In this case, 2 GPUs will be allocated for training, and 6 GPUs will be allocated for inference.
 
+When implementing decoupled training and inference, to prevent GPUs allocated for training and inference from constantly waiting for each other (causing resources to sit idle), slime automatically enables asynchronous training. This allows slime to initiate data generation for the next rollout while simultaneously conducting training for the current rollout.
+
 ⚠️  If the concurrency on each sglang server is too high, it may exceed sglang's default CUDA graph concurrency limit (the default maximum is 160), which will affect inference speed. You can adjust this in the following two ways:
 
 1.  Use `--sglang-server-concurrency` to limit the maximum number of concurrent requests sent to a single sglang server. For example:
@@ -313,8 +315,4 @@ In this case, 2 GPUs will be allocated for training, and 6 GPUs will be allocate
     --sglang-cuda-graph-bs 1 2 4 8 $(seq 16 8 256)
     ```
 
-### Asynchronous Training
-
-When you separate training and inference, you may notice that the training and inference GPUs are always waiting for each other. To prevent these resources from being idle, we can enable asynchronous training. This can be done by changing `train.py` to `train_async.py` in the startup script. By doing this, slime will generate data for the next rollout while training on the current one.
-
-The only difference between `train.py` and `train_async.py` lies in the synchronization logic of the training loop. We achieve this by using Ray's asynchronous features (`.remote`, `ray.get`).
+⚠️ During asynchronous training, sglang's performance monitoring logs and training logs may become intermingled, making them difficult to distinguish. You can reduce sglang's logs by using --sglang-log-level.

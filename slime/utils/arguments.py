@@ -59,6 +59,7 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 default=False,
                 help=(
                     "Whether to colocate the inference engines and the actor. "
+                    "If not enabled, the training and inference would be asynchronous."
                 ),
             )
 

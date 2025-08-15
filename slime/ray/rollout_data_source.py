@@ -81,9 +81,6 @@ class RolloutDataSource:
         raise RuntimeError(f"Cannot add samples to {self.__class__.__name__}. This is a read-only data source.")
 
     def save(self, rollout_id):
-        if not self.args.rollout_global_dataset:
-            return
-
         state_dict = {
             "sample_offset": self.sample_offset,
             "epoch_id": self.epoch_id,

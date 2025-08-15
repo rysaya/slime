@@ -119,7 +119,7 @@ ray job submit --address="http://127.0.0.1:8265" \
         "CUDA_DEVICE_MAX_CONNECTIONS": "1"
      }
    }' \
-   -- python3 train_async.py \
+   -- python3 train.py \
    --actor-num-nodes 1 \
    --actor-num-gpus-per-node 2 \
    ${MODEL_ARGS[@]} \

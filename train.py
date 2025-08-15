@@ -60,21 +60,22 @@ def train(args):
                 rollout_data_next_future = rollout_manager.async_generate(rollout_id + 1)
 
         ray.get(actor_model.async_train(rollout_id, rollout_data_curr_ref))
-        print("I'm here")
         if args.save_interval is not None and (
             (rollout_id + 1) % args.save_interval == 0
             or (num_rollout_per_epoch is not None and (rollout_id + 1) % num_rollout_per_epoch == 0)
         ):
             ray.get(actor_model.async_save_model(rollout_id) + [rollout_manager.controller.save.remote(rollout_id)])
-        print(f"Finish training rollout {rollout_id}.")
         if args.colocate:
-            ray.get(actor_model.async_offload() + [rollout_manager.async_onload(tags=[GPU_MEMORY_TYPE_WEIGHTS])])
+            ray.get(actor_model.async_offload() + rollout_manager.async_onload(tags=[GPU_MEMORY_TYPE_WEIGHTS]))
         else:
             # sync generate before update weights to prevent update weight in the middle of generation
-            rollout_data_next_future, _ = ray.wait(rollout_data_next_future, num_returns=len(rollout_data_next_future))
-        print("finish offload and onload")
+            if isinstance(rollout_data_next_future, list):
+                rollout_data_next_future = ray.wait(
+                    rollout_data_next_future, num_returns=len(rollout_data_next_future)
+                )[0]
+            else:
+                rollout_data_next_future = ray.wait([rollout_data_next_future], num_returns=1)[0][0]
         ray.get(actor_model.async_update_weights())
-        print(f"Finish updating weights for rollout {rollout_id}.")
         if args.colocate:
             ray.get(rollout_manager.async_onload(tags=[GPU_MEMORY_TYPE_KV_CACHE]))
 

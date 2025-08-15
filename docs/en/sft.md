@@ -84,4 +84,4 @@ You can compare [run-qwen3-4B-base-sft.sh](../../scripts/run-qwen3-4B.sh) with [
 
     Finally, `--disable-compute-advantages-and-returns` indicates that there is no need to pre-calculate log probabilities during the SFT process, and `--debug-train-only` means that `sglang` does not need to be initialized.
 
-3.  Used `train_async.py` instead of `train.py`. This is to leverage the asynchronous training process to implement data prefetching.
+3.  Do not use `--colocate`. This is to leverage the asynchronous training process to implement data prefetching.
