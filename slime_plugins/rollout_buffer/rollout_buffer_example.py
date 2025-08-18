@@ -292,7 +292,7 @@ async def generate_rollout_async(args, rollout_id: int, data_buffer, evaluation:
             )
         sample_results.append(group_results)
 
-    data_buffer.add_samples(sample_results)
+    data_buffer.buffer_append(sample_results)
     final_return_results = data_buffer.get_samples(args.rollout_batch_size)  # type: ignore
 
     return final_return_results

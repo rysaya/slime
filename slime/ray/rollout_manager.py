@@ -6,8 +6,10 @@ import ray
 from ray.util.scheduling_strategies import PlacementGroupSchedulingStrategy
 
 from slime.backends.sglang_utils.sglang_engine import SGLangEngine
-from slime.ray.buffer import RolloutController
+from slime.ray.controller import RolloutControllerWithBuffer, RolloutController
+from slime.ray.controller import log_eval_data, convert_rl_samples_to_train, convert_eval_samples_to_metrix
 from slime.utils.http_utils import find_available_port, get_host_info, run_router
+from slime.data import RolloutDataSet, EvalDataset
 from .utils import Lock, NOSET_VISIBLE_DEVICES_ENV_VARS_LIST
 from typing import List
 
@@ -158,16 +160,45 @@ class RolloutManager:
         else:
             self.rollout_engines = None
             self.rollout_engine_lock = None
-        self.controller = RolloutController.options(
+
+        data_loader_cls = RolloutControllerWithBuffer if args.partial_rollout else RolloutController
+
+        # TODO make RolloutDataSet to configurable cls load
+        self.train_data_loader = data_loader_cls.options(
             num_cpus=1,
             num_gpus=0,
-        ).remote(args, wandb_run_id=wandb_run_id)
+        ).remote(
+            args,
+            "train",
+            wandb_run_id,
+            RolloutDataSet,
+            args.rollout_function_path,
+            post_process_func=convert_rl_samples_to_train,
+        )
+        if args.eval_prompt_data is not None and args.eval_interval is not None and not args.debug_train_only:
+            self.eval_data_loader = RolloutController.options(
+                num_cpus=1,
+                num_gpus=0,
+            ).remote(
+                args,
+                "eval",
+                wandb_run_id,
+                EvalDataset,
+                args.eval_function_path,
+                post_process_func=convert_eval_samples_to_metrix,
+                log_func=log_eval_data,
+            )
+            print(f"import {self.args.eval_function_path} as eval_generate_rollout function.")
+        else:
+            self.eval_data_loader = None
 
     def async_generate(self, rollout_id):
-        return self.controller.generate.remote(rollout_id)
+        return self.train_data_loader.generate.remote(rollout_id)
 
     def async_eval(self, rollout_id):
-        return self.controller.eval.remote(rollout_id)
+        if self.eval_data_loader is None:
+            return []
+        return self.eval_data_loader.generate.remote(rollout_id)
 
     def async_offload(self):
         if self.rollout_engines is None:

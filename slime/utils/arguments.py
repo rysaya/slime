@@ -116,6 +116,16 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 "--rollout-top-k", type=int, default=-1, help="the top-k for the inference engine during rollout."
             )
             parser.add_argument(
+                "--rollout-type",
+                type=str,
+                default="online",
+                choices=["online", "offline"],
+                help=(
+                    "The type of rollout manager, 'online' means the rollout engines are used to generate data, "
+                    "'offline' means the offline data are directly passed to train the model"
+                ),
+            )
+            parser.add_argument(
                 "--rollout-max-prompt-len",
                 type=int,
                 default=None,
@@ -179,41 +189,18 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                     "This is used to shuffle the prompts and also for the random sampling of the prompts."
                 ),
             )
+            parser.add_argument(
+                "--use-token-output",
+                action="store_true",
+                default=False,
+                help=(
+                    "Use token-based output from SGLang instead of string-based output. "
+                    "This avoids encode/decode overhead and directly stores tokens, "
+                    "which is more efficient for training workflows."
+                ),
+            )
 
             # sampling
-            parser.add_argument(
-                "--over-sampling-batch-size",
-                type=int,
-                default=None,
-                help=(
-                    "This defines the granularity of the sampling batch in the rollout function. "
-                    "When the number of available samples falls below the target, a sampling "
-                    "operation of size over_sampling_batch_size will be triggered."
-                    "Regardless of whether partial rollout is used or filters are applied, "
-                    "the sampling granularity is always determined by this value. "
-                    "If this value is None, rollout_batch_size will be used as the default over_sampling_batch_size."
-                ),
-            )
-            parser.add_argument(
-                "--over-sampling-filter-input-size",
-                type=int,
-                default=None,
-                help=(
-                    "This is the input size for the over sampling filter."
-                    "This value will replace the rollout_batch_size as target batch size "
-                    "(number of complete, valid samples to be generated) when the over sampling filter is applied."
-                ),
-            )
-            parser.add_argument(
-                "--over-sampling-filter-path",
-                type=str,
-                default=None,
-                help=(
-                    "This parameter is used with the over_sampling_filter_input_size. "
-                    "The over sampling filter is applied only after enough data has been generated."
-                    "You could use `slime.rollout.filter_hub.over_sampling_filters.sort_by_reward_std` as an example."
-                ),
-            )
             parser.add_argument(
                 "--dynamic-sampling-filter-path",
                 type=str,
@@ -246,17 +233,6 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                     "This should be useful if you need to implement some special rollout logic, e.g. multi-turn, function calling."
                 ),
             )
-
-            parser.add_argument(
-                "--buffer-filter-path",
-                type=str,
-                default=None,
-                help=(
-                    "Path to the buffer filter function. "
-                    "It should be able to select the samples in the buffer. "
-                    "The function should take list[list[Sample]] and return list[list[Sample]]."
-                ),
-            )
             # update weight
             parser.add_argument(
                 "--update-weight-buffer-size",
@@ -267,12 +243,6 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                     "This is used for updating weights by chunk and should be useful for MoE models."
                 ),
             )
-            parser.add_argument(
-                "--keep-old-actor",
-                action="store_true",
-                help="Whether to keep the rollout model on training process",
-            )
-
             parser.add_argument(
                 "--rollout-data-postprocess-path",
                 type=str,
@@ -831,11 +801,15 @@ def parse_args(add_custom_arguments=None):
         args.load = args.ref_load
         args.start_rollout_id = 0
 
+    assert (
+        args.rollout_batch_size is not None and args.rollout_batch_size > 0
+    ), "rollout_batch_size is 0 or None. What do you wang to train???"
+
     if args.eval_interval is not None:
         assert args.eval_prompt_data is not None, "eval_prompt_data must be set when eval_interval is set"
         if len(args.eval_prompt_data) == 1:
-            print(f"[legacy] only one eval_prompt_data detected, will assume it is data for aime")
-            args.eval_prompt_data = ["aime", args.eval_prompt_data[0]]
+            print(f"[legacy] only one eval_prompt_data detected, will name it to 'default'")
+            args.eval_prompt_data = ["default", args.eval_prompt_data[0]]
         assert len(args.eval_prompt_data) % 2 == 0, "eval prompt data will need to be in pairs"
 
     assert not (args.kl_coef != 0 and args.kl_loss_coef != 0), "Only one of kl_coef and kl_loss_coef can be set"
@@ -909,14 +883,6 @@ def parse_args(add_custom_arguments=None):
     if args.n_samples_per_prompt == 1:
         args.grpo_std_normalization = False
         print("n_samples_per_prompt is set to 1, grpo_std_normalization will be set to False.")
-
-    if args.over_sampling_batch_size is None:
-        args.over_sampling_batch_size = args.rollout_batch_size
-
-    assert args.over_sampling_batch_size >= args.rollout_batch_size, (
-        f"over_sampling_batch_size {args.over_sampling_batch_size} should be greater than or equal to "
-        f"rollout_batch_size {args.rollout_batch_size}"
-    )
 
     if args.num_epoch is not None:
         if args.num_rollout is not None:

@@ -30,7 +30,7 @@ def generate_rollout(args, rollout_id, data_buffer, evaluation=False):
     if MASK_GENERATOR is None:
         MASK_GENERATOR = MultiTurnLossMaskGenerator(TOKENIZER, tokenizer_type=args.loss_mask_type)
 
-    samples = data_buffer.get_samples(args.rollout_batch_size)
+    samples = data_buffer.get_sample()
 
     for sample in samples:
         (sample,) = sample

@@ -23,20 +23,20 @@ def read_file(path):
 class Dataset:
     def __init__(
         self,
+        name,
         path,
         tokenizer,
         max_length,
-        *,
-        prompt_key="text",
+        seed=42,
+        input_key="text",
         label_key=None,
         tool_key=None,
         metadata_key="metadata",
-        seed=42,
         apply_chat_template=False,
     ):
         self.origin_samples = []
         for data in read_file(path):
-            prompt = data[prompt_key]
+            prompt = data[input_key]
             if apply_chat_template:
                 if tool_key is not None:
                     tools = data[tool_key]
@@ -52,6 +52,7 @@ class Dataset:
             self.origin_samples.append(
                 Sample(
                     prompt=prompt,
+                    data_source=name,
                     label=data[label_key] if label_key is not None else None,
                     metadata=data.get(metadata_key) or {},
                 )

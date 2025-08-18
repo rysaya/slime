@@ -10,6 +10,8 @@ class Sample:
     """The sample generated"""
 
     index: Optional[int] = None
+    rollout_id: Optional[int] = None
+    data_source: Optional[str] = None
     # prompt
     prompt: Union[str, list[dict[str, str]]] = ""
     tokens: list[int] = field(default_factory=list)
@@ -38,6 +40,12 @@ class Sample:
     def from_dict(data: dict):
         data["status"] = Sample.Status(data["status"])
         return Sample(**data)
+
+    def set_rollout_id(self, rollout_id):
+        self.rollout_id = rollout_id
+
+    def set_sample_id(self, sample_id):
+        self.index = sample_id
 
     def get_reward_value(self, args) -> float:
         return self.reward if not args.reward_key else self.reward[args.reward_key]

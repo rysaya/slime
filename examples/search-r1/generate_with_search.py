@@ -5,7 +5,6 @@ import re
 from google_search_server import google_search
 from qa_em_format import compute_score_em
 
-from slime.rollout.sglang_rollout import GenerateState
 from slime.utils.http_utils import post
 from slime.utils.types import Sample
 
@@ -89,16 +88,14 @@ If I want to give the final answer, I should put the answer between <answer> and
     return next_obs, done
 
 
-async def generate(args, sample: Sample, sampling_params) -> Sample:
+async def generate(args, tokenizer, sample, sampling_params) -> Sample:
     assert not args.partial_rollout, f"Partial rollout is not supported for this function at the moment."
-
-    state = GenerateState(args)
 
     url = f"http://{args.sglang_router_ip}:{args.sglang_router_port}/generate"
 
     # Handle partial rollout samples: continue generation from existing response
     prompt = sample.prompt
-    prompt_tokens_ids = state.tokenizer(sample.prompt, add_special_tokens=False)["input_ids"]
+    prompt_tokens_ids = tokenizer(sample.prompt, add_special_tokens=False)["input_ids"]
     response = ""
     response_token_ids = []
     loss_masks = []
@@ -117,7 +114,7 @@ async def generate(args, sample: Sample, sampling_params) -> Sample:
         cur_response = output["text"]
         cur_response = postprocess_responses(cur_response)
 
-        cur_response_token_ids = state.tokenizer(cur_response, add_special_tokens=False)["input_ids"]
+        cur_response_token_ids = tokenizer(cur_response, add_special_tokens=False)["input_ids"]
         response += cur_response
         response_token_ids += cur_response_token_ids
         loss_masks += [1] * len(cur_response_token_ids)
@@ -130,7 +127,7 @@ async def generate(args, sample: Sample, sampling_params) -> Sample:
             break
 
         assert next_obs != "", "Next observation should not be empty."
-        obs_tokens_ids = state.tokenizer(next_obs, add_special_tokens=False)["input_ids"]
+        obs_tokens_ids = tokenizer(next_obs, add_special_tokens=False)["input_ids"]
         response += next_obs
         response_token_ids += obs_tokens_ids
         loss_masks += [0] * len(obs_tokens_ids)
