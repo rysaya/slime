@@ -176,7 +176,7 @@ def start_rollout(api_base_url: str, args, metadata):
         "remote_engine_url": f"http://{args.sglang_router_ip}:{args.sglang_router_port}",
         "remote_buffer_url": args.rollout_buffer_url,
         "task_type": args.rollout_task_type,
-        "input_file": args.prompt_data,
+        "input_file": args.train_files,
         "num_repeat_per_sample": str(args.n_samples_per_prompt),
         "max_tokens": str(args.rollout_max_response_len),
         "sampling_params": {
@@ -281,10 +281,10 @@ async def generate_rollout_async(args, rollout_id: int, data_buffer, evaluation:
                     response_length=response_length,
                     reward=record["reward"],
                     status=(
-                        Sample.Status.COMPLETED
+                        SampleStatus.COMPLETED
                         if "finish_reason" not in record["extra_info"]
                         or record["extra_info"]["finish_reason"] != "length"
-                        else Sample.Status.TRUNCATED
+                        else SampleStatus.TRUNCATED
                     ),
                     loss_mask=loss_mask,
                     metadata={**record["extra_info"]},

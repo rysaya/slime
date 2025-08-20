@@ -6,7 +6,7 @@ from google_search_server import google_search
 from qa_em_format import compute_score_em
 
 from slime.utils.http_utils import post
-from slime.utils.types import Sample
+from slime.utils.types import Sample, SampleStatus
 
 SEARCH_R1_CONFIGS = {
     "max_turns": 3,
@@ -94,8 +94,8 @@ async def generate(args, tokenizer, sample, sampling_params) -> Sample:
     url = f"http://{args.sglang_router_ip}:{args.sglang_router_port}/generate"
 
     # Handle partial rollout samples: continue generation from existing response
-    prompt = sample.prompt
-    prompt_tokens_ids = tokenizer(sample.prompt, add_special_tokens=False)["input_ids"]
+    prompt = sample["prompt"]
+    prompt_tokens_ids = tokenizer(prompt, add_special_tokens=False)["input_ids"]
     response = ""
     response_token_ids = []
     loss_masks = []
@@ -108,7 +108,7 @@ async def generate(args, tokenizer, sample, sampling_params) -> Sample:
 
         # abort
         if output["meta_info"]["finish_reason"]["type"] == "abort":
-            sample.status = Sample.Status.ABORTED
+            sample.set_status(SampleStatus.ABORTED)
             return sample
 
         cur_response = output["text"]
@@ -132,17 +132,17 @@ async def generate(args, tokenizer, sample, sampling_params) -> Sample:
         response_token_ids += obs_tokens_ids
         loss_masks += [0] * len(obs_tokens_ids)
 
-    sample.tokens = prompt_tokens_ids + response_token_ids
-    sample.response_length = len(response_token_ids)
-    sample.response = response
-    sample.loss_masks = loss_masks
+    sample["tokens"] = prompt_tokens_ids + response_token_ids
+    sample["response_length"] = len(response_token_ids)
+    sample["response"] = response
+    sample["loss_masks"] = loss_masks
     match output["meta_info"]["finish_reason"]["type"]:
         case "length":
-            sample.status = Sample.Status.TRUNCATED
+            sample.set_status(SampleStatus.TRUNCATED)
         case "abort":
-            sample.status = Sample.Status.ABORTED
+            sample.set_status(SampleStatus.ABORTED)
         case "stop":
-            sample.status = Sample.Status.COMPLETED
+            sample.set_status(SampleStatus.COMPLETED)
 
     return sample
 
@@ -158,8 +158,8 @@ async def reward_func(args, sample, **kwargs):
         raise TypeError("Sample must be an instance of Sample class.")
 
     score = compute_score_em(
-        solution_str=sample.prompt + sample.response,
-        ground_truth=sample.label["ground_truth"],
+        solution_str=sample["prompt"] + sample["response"],
+        ground_truth=sample["label"],
         format_score=SEARCH_R1_CONFIGS["format_score"],
     )
 

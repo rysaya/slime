@@ -36,11 +36,11 @@ CKPT_ARGS=(
 )
 
 ROLLOUT_ARGS=(
-   --prompt-data $BASE_DIR/dapo-math-17k/dapo-math-17k.jsonl
+   --train-files $BASE_DIR/dapo-math-17k/dapo-math-17k.jsonl
    --input-key prompt
    --label-key label
    --apply-chat-template
-   --rollout-shuffle
+   --shuffle-dataset
    --rm-type deepscaler
    --num-rollout 3000
    --rollout-batch-size 128
@@ -57,7 +57,7 @@ ROLLOUT_ARGS=(
 
 EVAL_ARGS=(
    --eval-interval 20
-   --eval-prompt-data aime $BASE_DIR/rl_data/aime-2024.jsonl
+   --eval-files aime $BASE_DIR/rl_data/aime-2024.jsonl
    --n-samples-per-eval-prompt 8
    --eval-max-response-len 32768
    --eval-top-p 0.7

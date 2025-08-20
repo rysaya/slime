@@ -47,9 +47,9 @@ CKPT_ARGS=(
 
 SFT_ARGS=(
    --rollout-function-path slime.rollout.sft_rollout.generate_rollout
-   --prompt-data ${BASE_FOLDER}/openhermes2_5.parquet
+   --train-files ${BASE_FOLDER}/openhermes2_5.parquet
    --input-key messages
-   --rollout-shuffle
+   --shuffle-dataset
    --num-epoch 3
    --rollout-batch-size 128
    --global-batch-size 128

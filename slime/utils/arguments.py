@@ -175,13 +175,13 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 ),
             )
             parser.add_argument(
-                "--rollout-shuffle",
+                "--shuffle-dataset",
                 action="store_true",
                 default=False,
                 help=("Whether to shuffle the prompts during rollout."),
             )
             parser.add_argument(
-                "--rollout-seed",
+                "--dataset-seed",
                 type=int,
                 default=42,
                 help=(
@@ -276,7 +276,7 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
             )
 
             parser.add_argument(
-                "--prompt-data",
+                "--train-files",
                 type=str,
                 default=None,
                 help=(
@@ -288,9 +288,12 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 ),
             )
             parser.add_argument("--apply-chat-template", action="store_true", default=False)
-            parser.add_argument("--input-key", type=str, default="input", help="JSON dataset key")
-            parser.add_argument("--label-key", type=str, default=None, help="JSON dataset key")
-            parser.add_argument("--metadata-key", type=str, default="metadata", help="JSON dataset key")
+            parser.add_argument("--input-key", type=str, default="input", help="JSON dataset input key")
+            parser.add_argument("--label-key", type=str, default=None, help="JSON dataset label key")
+            parser.add_argument(
+                "--datasource-key", type=str, default="data_source", help="JSON dataset datasource key"
+            )
+            parser.add_argument("--metadata-key", type=str, default="metadata", help="JSON dataset metadata key")
             parser.add_argument(
                 "--tool-key",
                 type=str,
@@ -400,7 +403,7 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                     break
 
             parser.add_argument(
-                "--eval-prompt-data",
+                "--eval-files",
                 type=str,
                 default=None,
                 nargs="+",
@@ -412,9 +415,6 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
             )
 
             # The following keys are used to override the rollout version during eval.
-            parser.add_argument("--eval-input-key", type=str, default=None, help="JSON dataset key")
-            parser.add_argument("--eval-label-key", type=str, default=None, help="JSON dataset key")
-            parser.add_argument("--eval-tool-key", type=str, default=None, help="JSON dataset key")
             parser.add_argument(
                 "--n-samples-per-eval-prompt",
                 type=int,
@@ -652,12 +652,6 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 ),
             )
             parser.add_argument(
-                "--eval-reward-key",
-                type=str,
-                default=None,
-                help="The eval variant for --reward-key",
-            )
-            parser.add_argument(
                 "--group-rm", action="store_true", default=False, help="Whether to do rm on a whole group."
             )
             parser.add_argument(
@@ -805,12 +799,11 @@ def parse_args(add_custom_arguments=None):
         args.rollout_batch_size is not None and args.rollout_batch_size > 0
     ), "rollout_batch_size is 0 or None. What do you wang to train???"
 
-    if args.eval_interval is not None:
-        assert args.eval_prompt_data is not None, "eval_prompt_data must be set when eval_interval is set"
-        if len(args.eval_prompt_data) == 1:
-            print(f"[legacy] only one eval_prompt_data detected, will name it to 'default'")
-            args.eval_prompt_data = ["default", args.eval_prompt_data[0]]
-        assert len(args.eval_prompt_data) % 2 == 0, "eval prompt data will need to be in pairs"
+    if args.eval_files is None and args.eval_interval is not None:
+        print(
+            f"Warning!!! No eval-files provided but doing the eval, it makes no sense so setting eval_interval to None."
+        )
+        args.eval_interval = None
 
     assert not (args.kl_coef != 0 and args.kl_loss_coef != 0), "Only one of kl_coef and kl_loss_coef can be set"
 
@@ -827,9 +820,6 @@ def parse_args(add_custom_arguments=None):
 
     if args.eps_clip_high is None:
         args.eps_clip_high = args.eps_clip
-
-    if args.eval_reward_key is None:
-        args.eval_reward_key = args.reward_key
 
     if args.dump_details is not None:
         args.save_debug_rollout_data = f"{args.dump_details}/rollout_data/{{rollout_id}}.pt"

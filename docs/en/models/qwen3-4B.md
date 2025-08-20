@@ -90,14 +90,14 @@ CKPT_ARGS=(
 ```bash
 ROLLOUT_ARGS=(
    # Prompt dataset, each line is a JSON object
-   --prompt-data /root/dapo-math-17k/dapo-math-17k.jsonl
+   --train-files /root/dapo-math-17k/dapo-math-17k.jsonl
    --input-key prompt
    --label-key label
    # If the `input_key` in the prompt contains an OpenAI message,
    # tokenizer.apply_chat_template(...) will be executed
    --apply-chat-template
    # Whether to shuffle the data
-   --rollout-shuffle
+   --shuffle-dataset
 
    # Reward model type.
    # slime provides many types and --custom-rm-path for custom models
@@ -128,7 +128,7 @@ During evaluation, most rollout parameters are inherited, but we provide some pa
 ```bash
 EVAL_ARGS=(
    --eval-interval 5
-   --eval-prompt-data /root/aime-2024/aime-2024.jsonl
+   --eval-files /root/aime-2024/aime-2024.jsonl
    --n-samples-per-eval-prompt 16
    --eval-max-response-len 16384
    --eval-top-p 0.7

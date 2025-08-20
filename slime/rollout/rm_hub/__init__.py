@@ -15,9 +15,9 @@ from .math_utils import grade_answer_verl
 
 async def remote_rm(args, sample: Sample):
     payload = {
-        "prompt": sample.prompt,
-        "response": sample.response,
-        "label": sample.label,
+        "prompt": sample["prompt"],
+        "response": sample["response"],
+        "label": sample["label"],
     }
     session_kwargs = {}
     async with aiohttp.ClientSession(**session_kwargs) as session:
@@ -32,8 +32,8 @@ async def async_rm(args, sample: Sample, **kwargs):
         return await rm_function(args, sample, **kwargs)
 
     rm_type = args.rm_type
-    response = sample.response
-    label = sample.label
+    response = sample["response"]
+    label = sample["label"]
     if rm_type.startswith("boxed_"):
         response = extract_boxed_answer(response) or ""
         rm_type = rm_type[len("boxed_") :]

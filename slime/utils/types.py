@@ -1,54 +1,54 @@
-from dataclasses import dataclass, field
+from collections import UserDict
+from dataclasses import dataclass
 from enum import Enum
-from typing import Optional, Union, Any
 
 import torch
 
 
-@dataclass
-class Sample:
-    """The sample generated"""
+class SampleStatus(Enum):
+    PENDING = "pending"
+    COMPLETED = "completed"
+    TRUNCATED = "truncated"
+    ABORTED = "aborted"
 
-    index: Optional[int] = None
-    rollout_id: Optional[int] = None
-    data_source: Optional[str] = None
-    # prompt
-    prompt: Union[str, list[dict[str, str]]] = ""
-    tokens: list[int] = field(default_factory=list)
-    # response
-    response: str = ""
-    response_length: int = 0
-    label: Optional[str] = None
-    reward: Optional[Union[float, dict[str, Any]]] = None
-    loss_mask: Optional[list[int]] = None
 
-    class Status(Enum):
-        PENDING = "pending"
-        COMPLETED = "completed"
-        TRUNCATED = "truncated"
-        ABORTED = "aborted"
-
-    status: Status = Status.PENDING
-    metadata: dict = field(default_factory=dict)
+class Sample(UserDict):
+    def __getitem__(self, key):
+        if key not in self.data:
+            raise KeyError(f"Key '{key}' not found in Sample data.")
+        return self.data[key]
 
     def to_dict(self):
-        value = self.__dict__.copy()
-        value["status"] = self.status.value
-        return value
+        if "status" in self:
+            value = self.data.copy()
+            value["status"] = self.status.value
+            return value
+        return self.data
 
     @staticmethod
     def from_dict(data: dict):
-        data["status"] = Sample.Status(data["status"])
+        if "status" in data:
+            data["status"] = SampleStatus(data["status"])
         return Sample(**data)
 
     def set_rollout_id(self, rollout_id):
-        self.rollout_id = rollout_id
+        self["rollout_id"] = rollout_id
 
-    def set_sample_id(self, sample_id):
-        self.index = sample_id
+    def set_index(self, sample_id):
+        self["index"] = sample_id
 
-    def get_reward_value(self, args) -> float:
-        return self.reward if not args.reward_key else self.reward[args.reward_key]
+    def set_status(self, status: SampleStatus):
+        self["status"] = status
+
+    def get_metadata(self, key, default=None):
+        if "metadata" not in self:
+            self["metadata"] = {}
+        return self["metadata"].get(key, default)
+
+    def add_metadata(self, key, value):
+        if self.get("metadata", None) is None:
+            self["metadata"] = {}
+        self["metadata"][key] = value
 
 
 @dataclass

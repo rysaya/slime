@@ -28,11 +28,11 @@ CKPT_ARGS=(
 )
 
 ROLLOUT_ARGS=(
-   --prompt-data gsm8k/train.parquet
+   --train-files gsm8k/train.parquet
    --input-key messages
    --label-key label
    --apply-chat-template
-   --rollout-shuffle
+   --shuffle-dataset
    --rm-type math
    --num-rollout 3000
    --rollout-batch-size 32
@@ -48,7 +48,7 @@ ROLLOUT_ARGS=(
 
 EVAL_ARGS=(
    --eval-interval 20
-   --eval-prompt-data gsm8k gsm8k/test.parquet
+   --eval-files gsm8k gsm8k/test.parquet
    --n-samples-per-eval-prompt 1
    --eval-max-response-len 1024
    --eval-top-k 1

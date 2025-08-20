@@ -40,13 +40,7 @@ class RolloutControllerWithBuffer(RolloutControllerBase):
             path = Path(path_template.format(rollout_id=rollout_id))
             print(f"{self.tag}: Save debug rollout data to {path}")
             path.parent.mkdir(parents=True, exist_ok=True)
-            torch.save(
-                dict(
-                    rollout_id=rollout_id,
-                    samples=[sample.to_dict() for sample in data],
-                ),
-                path,
-            )
+            torch.save([d.to_dict() for d in data], path)
         data = self.post_process_func(self.args, data)
         self.log_func(rollout_id, self.args, data)
         return Box(ray.put(data))
@@ -62,10 +56,9 @@ class RolloutControllerWithBuffer(RolloutControllerBase):
     async def generate_rollout_async(self, rollout_id: int):
         results = []
         sample_idx = 1
-        do_print = True
-        pbar = tqdm(total=self.args.rollout_batch_size, desc=f"{self.tag} Rollout generation")
+        pbar = tqdm(total=self.rollout_batch_size, desc=f"{self.tag} Rollout generation")
 
-        semaphore = asyncio.Semaphore(self.args.rollout_batch_size)  # 最大并发数为rollout_batch_size
+        semaphore = asyncio.Semaphore(self.args.rollout_batch_size)  # 最大并发数为args的rollout_batch_size
         tasks = []
 
         # 按顺序提交任务
@@ -75,7 +68,7 @@ class RolloutControllerWithBuffer(RolloutControllerBase):
                 for s in sample:
                     s.set_rollout_id(rollout_id)
                     if sample_idx is not None:
-                        s.set_sample_id(sample_idx)
+                        s.set_index(sample_idx)
                 task = asyncio.create_task(
                     self.generate_func(self.args, sample, self.tokenizer, self.sampling_paras, self.aborted)
                 )
@@ -85,7 +78,7 @@ class RolloutControllerWithBuffer(RolloutControllerBase):
             for sample in self.buffer:
                 submit_sample(sample)
 
-            for _ in range(self.args.rollout_batch_size):
+            for _ in range(self.rollout_batch_size):
                 sample = self.data_source.get_sample()
                 if sample is None:
                     break
@@ -93,7 +86,7 @@ class RolloutControllerWithBuffer(RolloutControllerBase):
                 sample_idx += 1
 
             # 按顺序收集结果
-            while len(results) < self.args.rollout_batch_size and len(tasks) > 0:
+            while len(results) < self.rollout_batch_size and len(tasks) > 0:
                 # wait for the generation to finish
                 raw_done_tasks, tasks = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
                 new_done_results = []
@@ -101,16 +94,9 @@ class RolloutControllerWithBuffer(RolloutControllerBase):
                 for t in raw_done_tasks:
                     group: list[Sample] = t.result()
 
-                    if do_print:
-                        print(
-                            f"{self.tag}: First rollout sample: {[group[0].prompt + group[0].response]}, label: {group[0].label}, reward: {group[0].reward}",
-                            flush=True,
-                        )
-                        do_print = False
-
                     assert (
-                        len(group) == self.data_source.n_sample_per_prompt
-                    ), f"{self.tag}: We expect the generation per group is {self.data_source.n_sample_per_prompt}, but got {len(group)}"
+                        len(group) == self.data_source.n_samples_per_prompt
+                    ), f"{self.tag}: We expect the generation per group is {self.data_source.n_samples_per_prompt}, but got {len(group)}"
                     # not pass dynamic_filter, add a new task into the queue
                     if self.dynamic_filter is not None and not self.dynamic_filter(self.args, group):
                         new_task_nums += 1
@@ -132,20 +118,15 @@ class RolloutControllerWithBuffer(RolloutControllerBase):
                 pbar.update(len(new_done_results))
 
             pbar.close()
-        # TODO 先留你不杀
-        print(
-            f"{self.tag} Finish rollout: {[results[-1][0].prompt + results[-1][0].response]}, label: {results[-1][0].label}, reward: {results[-1][0].reward}",
-            flush=True,
-        )
 
         # there are still some unfinished requests, abort them
         aborted_samples = await self.abort(tasks, rollout_id)
 
-        if len(results) != self.args.rollout_batch_size:
+        if len(results) != self.rollout_batch_size:
             print(
-                f"{self.tag}: Warning! Sample Num less than batch size. Got {len(results)} samples, expected {self.args.rollout_batch_size}"
+                f"{self.tag}: Warning! Sample Num less than batch size. Got {len(results)} samples, expected {self.rollout_batch_size}"
             )
-        results = sorted(results, key=lambda group: group[0].index)
+        results = sorted(results, key=lambda group: group[0]["index"])
 
         # flatten the data if it is a list of lists
         if isinstance(results[0], list):
@@ -179,8 +160,8 @@ class RolloutControllerWithBuffer(RolloutControllerBase):
             for task in done:
                 group = task.result()
                 for sample in group:
-                    if sample.response and "start_rollout_id" not in sample.metadata:
-                        sample.metadata["start_rollout_id"] = rollout_id
+                    if sample["response"] and not sample.get_metadata("start_rollout_id"):
+                        sample.add_metadata("start_rollout_id", rollout_id)
                 aborted_samples.append(group)
                 count += len(group)
 

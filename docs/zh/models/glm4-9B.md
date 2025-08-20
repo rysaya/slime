@@ -90,14 +90,14 @@ CKPT_ARGS=(
 ```bash
 ROLLOUT_ARGS=(
    # prompt 数据集，每行是个 json
-   --prompt-data /root/dapo-math-17k/dapo-math-17k.jsonl
+   --train-files /root/dapo-math-17k/dapo-math-17k.jsonl
    --input-key prompt
    --label-key label
    # 如果 prompt 的 `input_key` 中是 openai message，
    # 会进行 tokenizer.apply_chat_template(...)
    --apply-chat-template
    # 是否 shuffle 数据
-   --rollout-shuffle
+   --shuffle-dataset
 
    # reward model 类型，
    # slime 提供了很多类型以及用于自定义的 --custom-rm-path
@@ -128,7 +128,7 @@ eval 的时候基本上是会继承所有 rollout 的参数，但是我们提供
 ```bash
 EVAL_ARGS=(
    --eval-interval 5
-   --eval-prompt-data /root/aime-2024/aime-2024.jsonl
+   --eval-files /root/aime-2024/aime-2024.jsonl
    --n-samples-per-eval-prompt 16
    --eval-max-response-len 16384
    --eval-top-p 0.7

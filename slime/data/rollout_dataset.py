@@ -1,82 +1,68 @@
 import copy
-import os
-from pathlib import Path
-
-import torch
-from slime.data.data import Dataset
-from transformers import AutoTokenizer
+from slime.data.dataset import Dataset, read_file
+from slime.utils.types import Sample, SampleStatus
 
 
-# TODO may further refactor data-loading part later
-class RolloutDataSet:
-    def __init__(self, args):
-        self.args = args
+class RolloutDataset(Dataset):
+    def __init__(self, args, path):
+        super().__init__(args, path)
+        self.n_samples_per_prompt = self.args.n_samples_per_prompt
+        self.init_dataset()
 
-        self.epoch_id = 0
-        self.sample_index = 0
-        self.sample_offset = 0
-        self.n_sample_per_prompt = self.args.n_samples_per_prompt
+    def init_dataset(self):
+        self.origin_samples = []
+        for name, data_path in self.data_path_info.items():
+            for data in read_file(data_path):
+                # TODO: this is slow. refactor to multiprocess
+                prompt = data[self.args.input_key]
+                if self.args.apply_chat_template:
+                    if self.args.tool_key is not None:
+                        tools = data[self.args.tool_key]
+                    else:
+                        tools = None
+                    prompt = self.tokenizer.apply_chat_template(
+                        prompt, tools, tokenize=False, add_generation_prompt=True
+                    )
 
-        tokenizer = AutoTokenizer.from_pretrained(args.hf_checkpoint, trust_remote_code=True)
+                if self.args.rollout_max_prompt_len is not None:
+                    if len(self.tokenizer(prompt)["input_ids"]) > self.args.rollout_max_prompt_len:
+                        continue
 
-        # TODO move (during the refactor)
-        if (d := args.dump_details) is not None:
-            tokenizer.save_pretrained(Path(d) / "tokenizer")
-
-        # TODO "default" key is temporaly solution, should further make data_source key in data like verl did
-        self.dataset = Dataset(
-            "default",
-            args.prompt_data,
-            tokenizer=tokenizer,
-            max_length=args.rollout_max_prompt_len,
-            input_key=args.input_key,
-            label_key=args.label_key,
-            metadata_key=args.metadata_key,
-            tool_key=args.tool_key,
-            apply_chat_template=args.apply_chat_template,
-            seed=args.rollout_seed,
-        )
-        if self.args.rollout_shuffle:
-            self.dataset.shuffle(self.epoch_id)
+                self.origin_samples.append(
+                    Sample(
+                        prompt=prompt,
+                        response="",
+                        data_source=data.get(self.args.datasource_key, name),
+                        label=data[self.args.label_key] if self.args.label_key is not None else None,
+                        status=SampleStatus.PENDING,
+                        metadata=data.get(self.args.metadata_key) or {},
+                    )
+                )
+        self.samples = self.origin_samples
+        if self.args.shuffle_dataset:
+            self.shuffle(self.epoch_id)
 
     def get_sample(self):
-        if self.sample_offset >= len(self.dataset):
+        if self.sample_offset >= len(self.samples):
             self.epoch_id += 1
-            if self.args.num_epoch is not None and self.epoch_id >= self.args.num_epoch:
+            if self.max_epoch is not None and self.epoch_id >= self.max_epoch:
                 return None
-            if self.args.rollout_shuffle:
-                self.dataset.shuffle(self.epoch_id)
+            if self.args.shuffle_dataset:
+                self.shuffle(self.epoch_id)
             self.sample_offset == 0
-        data = self.dataset.samples[self.sample_offset]
+        data = self.samples[self.sample_offset]
         self.sample_offset += 1
         data_group = []
-        for _ in range(self.args.n_samples_per_prompt):
+        for _ in range(self.n_samples_per_prompt):
             sample = copy.deepcopy(data)
-            sample.index = self.sample_index
+            sample.set_index(self.sample_index)
             self.sample_index += 1
             data_group.append(sample)
         return data_group
 
-    def save(self, rollout_id):
-        state_dict = {
-            "sample_offset": self.sample_offset,
-            "epoch_id": self.epoch_id,
-            "sample_index": self.sample_index,
-        }
-        path = os.path.join(self.args.save, f"rollout/global_dataset_state_dict_{rollout_id}.pt")
-        os.makedirs(os.path.dirname(path), exist_ok=True)
-        torch.save(state_dict, path)
 
-    def load(self, rollout_id=None):
-        path = os.path.join(self.args.load, f"rollout/global_dataset_state_dict_{rollout_id}.pt")
-        if not os.path.exists(path):
-            print(f"Checkpoint {path} does not exist.")
-            return
-
-        state_dict = torch.load(path)
-        self.sample_offset = state_dict.get("sample_offset", 0)
-        self.epoch_id = state_dict.get("epoch_id", 0)
-        self.sample_index = state_dict.get("sample_index", 0)
-
-        if self.args.rollout_shuffle:
-            self.dataset.shuffle(self.epoch_id)
+class EvalDataset(RolloutDataset):
+    def __init__(self, args, path):
+        super().__init__(args, path)
+        self.n_samples_per_prompt = self.args.n_samples_per_eval_prompt
+        self.max_epoch = 1

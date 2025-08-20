@@ -9,7 +9,7 @@ from slime.backends.sglang_utils.sglang_engine import SGLangEngine
 from slime.ray.controller import RolloutControllerWithBuffer, RolloutController
 from slime.ray.controller import log_eval_data, convert_rl_samples_to_train, convert_eval_samples_to_metrix
 from slime.utils.http_utils import find_available_port, get_host_info, run_router
-from slime.data import RolloutDataSet, EvalDataset
+from slime.data import RolloutDataset, EvalDataset
 from .utils import Lock, NOSET_VISIBLE_DEVICES_ENV_VARS_LIST
 from typing import List
 
@@ -163,7 +163,7 @@ class RolloutManager:
 
         data_loader_cls = RolloutControllerWithBuffer if args.partial_rollout else RolloutController
 
-        # TODO make RolloutDataSet to configurable cls load
+        # TODO make RolloutDataset to configurable cls load
         self.train_data_loader = data_loader_cls.options(
             num_cpus=1,
             num_gpus=0,
@@ -171,11 +171,11 @@ class RolloutManager:
             args,
             "train",
             wandb_run_id,
-            RolloutDataSet,
+            RolloutDataset,
             args.rollout_function_path,
             post_process_func=convert_rl_samples_to_train,
         )
-        if args.eval_prompt_data is not None and args.eval_interval is not None and not args.debug_train_only:
+        if args.eval_files is not None and args.eval_interval is not None and not args.debug_train_only:
             self.eval_data_loader = RolloutController.options(
                 num_cpus=1,
                 num_gpus=0,

@@ -51,14 +51,14 @@ CKPT_ARGS=(
 ROLLOUT_ARGS=(
    --rollout-function-path slime_plugin.rollout_buffer.rollout_buffer_example.generate_rollout
    --rm-type deepscaler
-   --prompt-data /root/dapo-math-17k/dapo-math-17k.jsonl
+   --train-files /root/dapo-math-17k/dapo-math-17k.jsonl
    --input-key prompt
    --label-key label
    --num-rollout 3000
    --rollout-batch-size 128
    --rollout-max-response-len 8192
    --rollout-temperature 0.8
-   --rollout-shuffle
+   --shuffle-dataset
    --n-samples-per-prompt 8
    --global-batch-size 1024
    --micro-batch-size 8

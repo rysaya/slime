@@ -143,7 +143,6 @@ def process_rollout_data(args, rollout_data_ref, dp_rank, dp_size):
         "truncated",
         "loss_masks",
         "round_number",
-        "sample_indices",
     ]:
         if key not in data:
             continue
