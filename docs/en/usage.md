@@ -163,7 +163,6 @@ This corresponds to the following configuration:
 ```bash
   --input-key prompt
   --label-key label
-  --apply-chat-template
 ```
 
 Additionally, we provide a `metadata_key`, which defaults to `"metadata"`. When read, slime will load the metadata from the data, which can be helpful for custom data generation or creating custom reward models.

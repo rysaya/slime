@@ -93,9 +93,6 @@ ROLLOUT_ARGS=(
    --train-files /root/dapo-math-17k/dapo-math-17k.jsonl
    --input-key prompt
    --label-key label
-   # 如果 prompt 的 `input_key` 中是 openai message，
-   # 会进行 tokenizer.apply_chat_template(...)
-   --apply-chat-template
    # 是否 shuffle 数据
    --shuffle-dataset
 

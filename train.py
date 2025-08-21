@@ -71,14 +71,19 @@ def train(args):
             ray.get(actor_model.async_offload() + rollout_manager.async_onload(tags=[GPU_MEMORY_TYPE_WEIGHTS]))
         else:
             rollout_data_next_future = ray.wait([rollout_data_next_future], num_returns=1)[0][0]
-        ray.get(actor_model.async_update_weights())
+
+        need_eval = args.eval_interval is not None and (
+            (rollout_id + 1) % args.eval_interval == 0
+            or (num_rollout_per_epoch is not None and (rollout_id + 1) % num_rollout_per_epoch == 0)
+        )
+
+        if not args.only_update_weight_on_eval or need_eval:
+            ray.get(actor_model.async_update_weights())
+
         if args.colocate:
             ray.get(rollout_manager.async_onload(tags=[GPU_MEMORY_TYPE_KV_CACHE]))
 
-        if args.eval_interval is not None and (
-            (rollout_id + 1) % args.eval_interval == 0
-            or (num_rollout_per_epoch is not None and (rollout_id + 1) % num_rollout_per_epoch == 0)
-        ):
+        if need_eval:
             ray.get(rollout_manager.async_eval(rollout_id))
 
 

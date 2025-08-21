@@ -116,10 +116,10 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 "--rollout-top-k", type=int, default=-1, help="the top-k for the inference engine during rollout."
             )
             parser.add_argument(
-                "--rollout-type",
+                "--train-type",
                 type=str,
-                default="online",
-                choices=["online", "offline"],
+                default="rl",
+                choices=["rl", "sft", "rm"],
                 help=(
                     "The type of rollout manager, 'online' means the rollout engines are used to generate data, "
                     "'offline' means the offline data are directly passed to train the model"
@@ -235,6 +235,15 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
             )
             # update weight
             parser.add_argument(
+                "--only-update-weight-on-eval",
+                action="store_true",
+                default=False,
+                help=(
+                    "Whether to only update the weights on each evaluation step. "
+                    "If set, the weights will be only updated on each evaluation step"
+                ),
+            )
+            parser.add_argument(
                 "--update-weight-buffer-size",
                 type=int,
                 default=512 * 1024**2,
@@ -283,11 +292,19 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                     "The path to the prompt data. "
                     "Currently we only support jsonl format, and each line should contains --input-key and --label-key, "
                     "which will be used as the prompt and the label respectively. "
-                    "If you want to use a custom template, you can set --apply-chat-template to true, in that case, "
+                    "If you want to use a custom template, you can set --chat-template to true, in that case, "
                     "the input should be the same structure as an openai message, e.g. [\{'role': 'user', 'content': 'blabla'\}]. "
                 ),
             )
-            parser.add_argument("--apply-chat-template", action="store_true", default=False)
+            parser.add_argument(
+                "--chat-template",
+                type=str,
+                default=None,
+                help=(
+                    "If you want to use cuntom chat template."
+                    "You could use `slime.data.templates.chat_templates` as a hub of chat templates."
+                ),
+            )
             parser.add_argument("--input-key", type=str, default="input", help="JSON dataset input key")
             parser.add_argument("--label-key", type=str, default=None, help="JSON dataset label key")
             parser.add_argument(
@@ -454,16 +471,6 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 help="KL penalty coefficient for reward shaping. This is applied to the reward signal before advantage calculation.",
             )
             parser.add_argument(
-                "--loss-type",
-                type=str,
-                choices=["policy_loss", "sft_loss", "custom_loss"],
-                default="policy_loss",
-                help=(
-                    "Choose loss type, currently support ppo policy_loss or sft_loss, "
-                    "if custom_loss is set, we will use the function path from `--custom-loss-function-path`."
-                ),
-            )
-            parser.add_argument(
                 "--custom-loss-function-path",
                 type=str,
                 default=None,
@@ -484,16 +491,6 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 type=str,
                 choices=["grpo", "gspo", "reinforce_plus_plus", "reinforce_plus_plus_baseline"],
                 default="grpo",
-            )
-            parser.add_argument(
-                "--disable-compute-advantages-and-returns",
-                action="store_false",
-                dest="compute_advantages_and_returns",
-                help=(
-                    "Whether to disable computing advantages and returns. "
-                    "If set, we will not compute the advantages and returns, "
-                    "This is useful for sft or custom loss function."
-                ),
             )
             parser.add_argument(
                 "--use-kl-loss", action="store_true", default=False, help="whether to use KL loss from GRPO"
@@ -811,6 +808,29 @@ def parse_args(add_custom_arguments=None):
         assert args.normalize_advantages, (
             "The 'reinforce_plus_plus' and 'reinforce_plus_plus_baseline' advantage estimators "
             "require advantage normalization. Please add `--normalize-advantages` to your command."
+        )
+
+    if args.train_type != "rl":
+        if not args.colocate:
+            args.colocate = True
+            print("train_type is not rl, use colocate to save GPU memory")
+        if args.train_files == "sft" and args.eval_interval is not None and not args.only_update_weight_on_eval:
+            args.only_update_weight_on_eval = True
+            print(
+                "Warning: The auto evaluation is set but the the only_update_weight_on_eval is not set"
+                + "The weight would be updated on each train, which could be very slow. To avoid it, now turn it on"
+            )
+        if args.debug_rollout_only:
+            raise ValueError("offline training do not use rollout, why you want to debug it???")
+        if args.train_files == "sft" and not args.calculate_per_token_loss:
+            args.calculate_per_token_loss = True
+            print(f"Warning: train_type is sft, but calculate_per_token_loss is not set, now turn it on")
+
+    if args.partial_rollout and not args.use_dynamic_batch_size:
+        args.use_dynamic_batch_size = True
+        print(
+            f"partial_rollout would deliver unstable bath datas,"
+            + "thus the use_dynamic_batch_size must turn on. Now turn it on"
         )
 
     if args.use_dynamic_batch_size:

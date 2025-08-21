@@ -15,7 +15,7 @@ class SampleStatus(Enum):
 class Sample(UserDict):
     def __getitem__(self, key):
         if key not in self.data:
-            raise KeyError(f"Key '{key}' not found in Sample data.")
+            raise KeyError(f"Key '{key}' not found in Sample data., Available keys: {list(self.data.keys())}")
         return self.data[key]
 
     def to_dict(self):

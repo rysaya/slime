@@ -195,7 +195,7 @@ class MegatronTrainRayActor(TrainRayActor):
                 # Create data iterator for log_probs and train.
                 data_iterator, num_microbatches = get_data_iterator(self.args, self.model, rollout_data)
 
-            if self.args.compute_advantages_and_returns:
+            if self.args.train_type == "rl":
                 if "ref" in self.weights:
                     rollout_data.update(
                         self.compute_log_prob(

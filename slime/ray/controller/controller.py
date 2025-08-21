@@ -1,14 +1,14 @@
 import asyncio
 import logging
-from typing import Union
 import wandb
 import ray
 from tqdm import tqdm
 from transformers import AutoTokenizer
 
 from slime.rollout.sampling_params import compute_sampling_params, eval_sampling_params
+from slime.data import dummy_convert_func
 from slime.utils.misc import load_function
-from slime.utils.types import Sample, SampleStatus
+from slime.utils.types import Sample
 from slime.utils.async_utils import run
 from slime.utils.ray_utils import Box
 from slime.utils.wandb_utils import init_wandb_secondary
@@ -43,58 +43,8 @@ def pop_first(args, buffer: list[list[Sample]], num_samples: int = -1) -> list[l
     return samples
 
 
-def dummy_convert_func(samples: Union[list[Sample], list[list[Sample]]]):
-    return samples
-
-
 def dummy_log_func(rollout_id, args, data):
     return
-
-
-def convert_eval_samples_to_metrix(args, samples: Union[list[Sample], list[list[Sample]]]):
-    eval_metrics = {}
-
-    for s in samples:
-        if s["data_source"] not in eval_metrics:
-            eval_metrics[s["data_source"]] = {"rewards": [], "truncated": []}
-        eval_metrics[s["data_source"]]["rewards"].append(s["reward"])
-        eval_metrics[s["data_source"]]["truncated"].append(s["status"] == SampleStatus.TRUNCATED)
-
-    return eval_metrics
-
-
-def convert_rl_samples_to_train(args, samples: Union[list[Sample], list[list[Sample]]]):
-    """
-    Convert inference generated samples to training data.
-    """
-    train_data = {
-        "tokens": [sample["tokens"] for sample in samples],
-        "response_lengths": [sample["response_length"] for sample in samples],
-        "rewards": [sample["reward"] for sample in samples],
-        "truncated": [1 if sample["status"] == SampleStatus.TRUNCATED else 0 for sample in samples],
-    }
-
-    # loss mask
-    # TODO: compress the loss mask
-    loss_masks = []
-    for sample in samples:
-        # always instantiate loss_mask if not provided
-        if sample.get("loss_mask", None) is None:
-            sample["loss_masks"] = [1] * sample["response_length"]
-        assert (
-            len(sample["loss_masks"]) == sample["response_length"]
-        ), f"loss mask length {len(sample['loss_masks'])} != response length {sample['response_length']}"
-        loss_masks.append(sample["loss_masks"])
-    train_data["loss_masks"] = loss_masks
-
-    # overwriting the raw reward
-    if samples[0].get_metadata("raw_reward"):
-        train_data["raw_reward"] = [sample.get_metadata("raw_reward") for sample in samples]
-
-    # For rollout buffer
-    if samples[0].get_metadata("round_number"):
-        train_data["round_number"] = [sample.get_metadata("round_number") for sample in samples]
-    return train_data
 
 
 class RolloutControllerBase:
@@ -144,7 +94,7 @@ class RolloutControllerBase:
         pbar = tqdm(total=self.rollout_batch_size, desc=f"{self.tag} Rollout generation")
 
         semaphore = asyncio.Semaphore(self.args.rollout_batch_size)  # 最大并发数为args的rollout_batch_size
-        tasks = []
+        tasks = set([])
 
         # 按顺序提交任务
         async with semaphore:
@@ -155,7 +105,7 @@ class RolloutControllerBase:
                     if sample_idx is not None:
                         s.set_index(sample_idx)
                 task = asyncio.create_task(self.generate_func(self.args, sample, self.tokenizer, self.sampling_paras))
-                tasks.append(task)
+                tasks.add(task)
 
             for _ in range(self.rollout_batch_size):
                 sample = self.data_source.get_sample()

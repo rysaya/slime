@@ -38,7 +38,6 @@ ROLLOUT_ARGS=(
    --train-files /root/dapo-math-17k/dapo-math-17k.jsonl
    --input-key prompt
    --label-key label
-   --apply-chat-template
    --shuffle-dataset
 
    --rm-type deepscaler

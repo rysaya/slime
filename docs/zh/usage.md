@@ -168,7 +168,6 @@ sglang 的加载非常简单，只需要：
 ```bash
   --input-key prompt
   --label-key label
-  --apply-chat-template
 ```
 
 另外我们还提供了一个 metadata_key，默认为 `"metadata"`，读取后我们会把数据中的 metadata 加载进 slime，可能会对自定义数据生成或者自定义 reward model 有帮助。

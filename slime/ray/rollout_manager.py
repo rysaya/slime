@@ -7,9 +7,9 @@ from ray.util.scheduling_strategies import PlacementGroupSchedulingStrategy
 
 from slime.backends.sglang_utils.sglang_engine import SGLangEngine
 from slime.ray.controller import RolloutControllerWithBuffer, RolloutController
-from slime.ray.controller import log_eval_data, convert_rl_samples_to_train, convert_eval_samples_to_metrix
+from slime.ray.controller import log_eval_data
 from slime.utils.http_utils import find_available_port, get_host_info, run_router
-from slime.data import RolloutDataset, EvalDataset
+from slime.data import EvalDataset, convert_eval_samples_to_metrix
 from .utils import Lock, NOSET_VISIBLE_DEVICES_ENV_VARS_LIST
 from typing import List
 
@@ -162,6 +162,7 @@ class RolloutManager:
             self.rollout_engine_lock = None
 
         data_loader_cls = RolloutControllerWithBuffer if args.partial_rollout else RolloutController
+        dataset_cls, post_process_func = self._get_train_cls_funcs()
 
         # TODO make RolloutDataset to configurable cls load
         self.train_data_loader = data_loader_cls.options(
@@ -171,10 +172,11 @@ class RolloutManager:
             args,
             "train",
             wandb_run_id,
-            RolloutDataset,
+            dataset_cls,
             args.rollout_function_path,
-            post_process_func=convert_rl_samples_to_train,
+            post_process_func=post_process_func,
         )
+        print(f"import {args.rollout_function_path} as generate_rollout function.")
         if args.eval_files is not None and args.eval_interval is not None and not args.debug_train_only:
             self.eval_data_loader = RolloutController.options(
                 num_cpus=1,
@@ -191,6 +193,22 @@ class RolloutManager:
             print(f"import {self.args.eval_function_path} as eval_generate_rollout function.")
         else:
             self.eval_data_loader = None
+
+    def _get_train_cls_funcs(self):
+        if self.args.train_type == "sft":
+            from slime.data import SFTDataset, convert_sft_samples_to_train
+
+            return SFTDataset, convert_sft_samples_to_train
+        elif self.args.train_type == "rm":
+            from slime.data import RewardDataset, convert_rm_samples_to_train
+
+            return RewardDataset, convert_rm_samples_to_train
+        elif self.args.train_type == "rl":
+            from slime.data import RolloutDataset, convert_rl_samples_to_train
+
+            return RolloutDataset, convert_rl_samples_to_train
+        else:
+            raise ValueError(f"Unknown train type: {self.args.train_type}")
 
     def async_generate(self, rollout_id):
         return self.train_data_loader.generate.remote(rollout_id)

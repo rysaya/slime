@@ -30,7 +30,6 @@ ROLLOUT_ARGS=(
    --train-files /root/nq_search/train.parquet
    --input-key prompt
    --label-key reward_model
-   --apply-chat-template
    --shuffle-dataset
    --num-rollout 3000
    --rollout-batch-size 32

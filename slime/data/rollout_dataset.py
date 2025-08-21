@@ -1,6 +1,71 @@
 import copy
+import torch
+from typing import Union
 from slime.data.dataset import Dataset, read_file
 from slime.utils.types import Sample, SampleStatus
+from slime.data.templates import get_chat_template
+
+
+def convert_rl_samples_to_train(args, samples: Union[list[Sample], list[list[Sample]]]):
+    """
+    Convert inference generated samples to training data.
+    """
+    train_data = {
+        "tokens": [sample["tokens"] for sample in samples],
+        "response_lengths": [sample["response_length"] for sample in samples],
+        "rewards": [sample["reward"] for sample in samples],
+        "truncated": [1 if sample["status"] == SampleStatus.TRUNCATED else 0 for sample in samples],
+    }
+
+    # loss mask
+    # TODO: compress the loss mask
+    loss_masks = []
+    for sample in samples:
+        # always instantiate loss_mask if not provided
+        if sample.get("loss_mask", None) is None:
+            sample["loss_masks"] = [1] * sample["response_length"]
+        assert (
+            len(sample["loss_masks"]) == sample["response_length"]
+        ), f"loss mask length {len(sample['loss_masks'])} != response length {sample['response_length']}"
+        loss_masks.append(sample["loss_masks"])
+    train_data["loss_masks"] = loss_masks
+
+    rewards = train_data["rewards"]
+    # overwriting the raw reward
+    if samples[0].get_metadata("raw_reward"):
+        train_data["raw_reward"] = [sample.get_metadata("raw_reward") for sample in samples]
+
+    # For rollout buffer
+    if samples[0].get_metadata("round_number"):
+        train_data["round_number"] = [sample.get_metadata("round_number") for sample in samples]
+
+    if args.advantage_estimator in ["grpo", "gspo", "reinforce_plus_plus_baseline"] and args.rewards_normalization:
+        # group norm
+        rewards = torch.tensor([r for r in rewards], dtype=torch.float)
+        rewards = rewards.reshape(-1, args.n_samples_per_prompt)
+        mean = rewards.mean(dim=-1, keepdim=True)
+        rewards = rewards - mean
+
+        if args.advantage_estimator in ["grpo", "gspo"] and args.grpo_std_normalization:
+            std = rewards.std(dim=-1, keepdim=True)
+            rewards = rewards / (std + 1e-6)
+
+        rewards = rewards.flatten().tolist()
+        train_data["rewards"] = rewards
+
+    return train_data
+
+
+def convert_eval_samples_to_metrix(args, samples: Union[list[Sample], list[list[Sample]]]):
+    eval_metrics = {}
+
+    for s in samples:
+        if s["data_source"] not in eval_metrics:
+            eval_metrics[s["data_source"]] = {"rewards": [], "truncated": []}
+        eval_metrics[s["data_source"]]["rewards"].append(s["reward"])
+        eval_metrics[s["data_source"]]["truncated"].append(s["status"] == SampleStatus.TRUNCATED)
+
+    return eval_metrics
 
 
 class RolloutDataset(Dataset):
@@ -15,7 +80,10 @@ class RolloutDataset(Dataset):
             for data in read_file(data_path):
                 # TODO: this is slow. refactor to multiprocess
                 prompt = data[self.args.input_key]
-                if self.args.apply_chat_template:
+                if self.args.chat_template:
+                    chat_template = get_chat_template(self.args.chat_template)
+                    prompt = chat_template(prompt, self.tokenizer)
+                else:
                     if self.args.tool_key is not None:
                         tools = data[self.args.tool_key]
                     else:
@@ -49,7 +117,7 @@ class RolloutDataset(Dataset):
                 return None
             if self.args.shuffle_dataset:
                 self.shuffle(self.epoch_id)
-            self.sample_offset == 0
+            self.sample_offset = 0
         data = self.samples[self.sample_offset]
         self.sample_offset += 1
         data_group = []
@@ -65,4 +133,4 @@ class EvalDataset(RolloutDataset):
     def __init__(self, args, path):
         super().__init__(args, path)
         self.n_samples_per_prompt = self.args.n_samples_per_eval_prompt
-        self.max_epoch = 1
+        self.max_epoch = None

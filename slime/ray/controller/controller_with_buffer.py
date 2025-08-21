@@ -6,11 +6,12 @@ from tqdm import tqdm
 import ray
 import torch
 
+from slime.data import dummy_convert_func
 from slime.utils.http_utils import post, get
 from slime.utils.types import Sample
 from slime.utils.async_utils import run
 from slime.utils.ray_utils import Box
-from .controller import RolloutControllerBase
+from .controller import RolloutControllerBase, dummy_log_func
 
 logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("httpcore").setLevel(logging.WARNING)
@@ -20,7 +21,16 @@ logging.getLogger("httpcore").setLevel(logging.WARNING)
 class RolloutControllerWithBuffer(RolloutControllerBase):
     """The class to run rollout and convert rollout data to training data."""
 
-    def __init__(self, args, tag, wandb_run_id, datasource_cls, rollout_function_path, post_process_func, log_func):
+    def __init__(
+        self,
+        args,
+        tag,
+        wandb_run_id,
+        datasource_cls,
+        rollout_function_path,
+        post_process_func=dummy_convert_func,
+        log_func=dummy_log_func,
+    ):
         super().__init__(args, tag, wandb_run_id, datasource_cls, rollout_function_path, post_process_func, log_func)
         self.buffer = []
         self.aborted = False
@@ -54,12 +64,13 @@ class RolloutControllerWithBuffer(RolloutControllerBase):
     """
 
     async def generate_rollout_async(self, rollout_id: int):
+        # TODO add a better over-sampling strategy back
         results = []
         sample_idx = 1
         pbar = tqdm(total=self.rollout_batch_size, desc=f"{self.tag} Rollout generation")
 
         semaphore = asyncio.Semaphore(self.args.rollout_batch_size)  # 最大并发数为args的rollout_batch_size
-        tasks = []
+        tasks = set([])
 
         # 按顺序提交任务
         async with semaphore:
@@ -72,7 +83,7 @@ class RolloutControllerWithBuffer(RolloutControllerBase):
                 task = asyncio.create_task(
                     self.generate_func(self.args, sample, self.tokenizer, self.sampling_paras, self.aborted)
                 )
-                tasks.append(task)
+                tasks.add(task)
 
             # samples in buffer already have sample_idx, no need to set again
             for sample in self.buffer:
@@ -179,7 +190,7 @@ class RolloutControllerWithBuffer(RolloutControllerBase):
         assert isinstance(samples[0], list), f"the elements of samples must be list, got {type(samples[0])}"
         for i in range(0, len(samples)):
             assert (
-                len(samples[i]) == self.args.n_samples_per_prompt
-            ), f"the length of the elements of samples must be equal to n_samples_per_prompt, got {len(samples[i])} != {self.args.n_samples_per_prompt}"
+                len(samples[i]) == self.data_source.n_samples_per_prompt
+            ), f"the length of the elements of samples must be equal to n_samples_per_prompt, got {len(samples[i])} != {self.data_source.n_samples_per_prompt}"
             group = samples[i]  # type: ignore
             self.buffer.append(group)

@@ -356,16 +356,18 @@ def loss_function(args, batch, num_microbatches, logits):
         "sum_of_sample_mean": sum_of_sample_mean,
     }
 
-    match args.loss_type:
-        case "policy_loss":
+    if args.custom_loss_function_path is not None:
+        custom_loss_function = load_function(args.custom_loss_function_path)
+        loss, log = custom_loss_function(**loss_function_kwargs)
+    else:
+        if args.train_type == "rl":
             loss, log = policy_loss_function(**loss_function_kwargs)
-        case "sft_loss":
+        elif args.train_type == "sft":
             loss, log = sft_loss_function(**loss_function_kwargs)
-        case "custom_loss":
-            custom_loss_function = load_function(args.custom_loss_function_path)
-            loss, log = custom_loss_function(**loss_function_kwargs)
-        case _:
-            raise ValueError(f"Unknown loss type: {args.loss_type}")
+        elif args.train_type == "rm":
+            raise ValueError(f"Currently not implemented RM loss")
+        else:
+            raise ValueError(f"Unknown train type: {args.train_type}")
 
     # Here we need to divide by cp_size because to cancel the multiply in Megatron.
     loss = (

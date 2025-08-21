@@ -31,7 +31,6 @@ ROLLOUT_ARGS=(
    --train-files gsm8k/train.parquet
    --input-key messages
    --label-key label
-   --apply-chat-template
    --shuffle-dataset
    --rm-type math
    --num-rollout 3000

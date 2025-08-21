@@ -50,7 +50,6 @@ ROLLOUT_ARGS=(
    --train-files ${BASE_FOLDER}/dapo-math-17k/dapo-math-17k.jsonl
    --input-key prompt
    --label-key label
-   --apply-chat-template
    --shuffle-dataset
 
    --rm-type deepscaler

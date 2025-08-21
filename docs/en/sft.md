@@ -67,7 +67,6 @@ You can compare [run-qwen3-4B-base-sft.sh](../../scripts/run-qwen3-4B.sh) with [
        --rollout-batch-size 128
        --global-batch-size 128
 
-       --loss-type sft_loss
        --calculate-per-token-loss
        --disable-compute-advantages-and-returns
        --debug-train-only
