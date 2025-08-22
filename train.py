@@ -47,7 +47,7 @@ def train(args):
     if not args.colocate:
         rollout_data_next_future = rollout_manager.async_generate(args.start_rollout_id)
     # make eval at first step
-    need_eval = args.eval_interval is not None
+    need_eval = args.eval_interval > 0
     need_on_off_switch = args.colocate and (not args.only_update_weight_on_eval or need_eval)
     if need_eval:
         ray.get(rollout_manager.async_eval(args.start_rollout_id))
@@ -71,7 +71,7 @@ def train(args):
                 actor_model.async_save_model(rollout_id) + [rollout_manager.train_data_loader.save.remote(rollout_id)]
             )
 
-        need_eval = args.eval_interval is not None and (
+        need_eval = args.eval_interval > 0 and (
             (rollout_id + 1) % args.eval_interval == 0
             or (num_rollout_per_epoch is not None and (rollout_id + 1) % num_rollout_per_epoch == 0)
         )

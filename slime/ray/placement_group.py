@@ -120,7 +120,7 @@ def create_actor_group(args, pg, wandb_run_id):
 
 def create_rollout_manager(args, pg, actor_model, wandb_run_id):
     init_gen_engine = (
-        args.train_type == "rl" or (args.eval_files is not None and args.eval_interval is not None)
+        args.train_type == "rl" or (args.eval_files is not None and args.eval_interval > 0)
     ) and not args.debug_train_only
 
     rollout_manager = RolloutManager(args, pg, wandb_run_id=wandb_run_id, init_gen_engines=init_gen_engine)

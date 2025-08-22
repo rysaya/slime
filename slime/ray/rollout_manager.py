@@ -177,7 +177,7 @@ class RolloutManager:
             post_process_func=post_process_func,
         )
         print(f"import {args.rollout_function_path} as generate_rollout function.")
-        if args.eval_files is not None and args.eval_interval is not None and not args.debug_train_only:
+        if args.eval_files is not None and args.eval_interval > 0 and not args.debug_train_only:
             self.eval_data_loader = RolloutController.options(
                 num_cpus=1,
                 num_gpus=0,

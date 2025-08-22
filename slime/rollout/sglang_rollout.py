@@ -128,7 +128,7 @@ async def generate_rollout(args, sample_group, tokenizer, sampling_params, abort
         for sample, reward in zip(sample_group, rewards):
             sample["reward"] = reward
 
-    if sample_group[0]["index"] == 1:
+    if not aborted and sample_group[0]["index"] == 1:
         print(
             f"First rollout sample: {[sample_group[0]['prompt'] + sample_group[0]['response']]}, label: {sample_group[0]['label']}, reward: {sample_group[0]['reward']}",
             flush=True,

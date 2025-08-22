@@ -416,7 +416,7 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
             # change the default value of eval_interval from Megatron to None
             for action in parser._actions:
                 if "--eval-interval" in action.option_strings:
-                    action.default = None
+                    action.default = 0
                     break
 
             parser.add_argument(
@@ -796,11 +796,9 @@ def parse_args(add_custom_arguments=None):
         args.rollout_batch_size is not None and args.rollout_batch_size > 0
     ), "rollout_batch_size is 0 or None. What do you wang to train???"
 
-    if args.eval_files is None and args.eval_interval is not None:
-        print(
-            f"Warning!!! No eval-files provided but doing the eval, it makes no sense so setting eval_interval to None."
-        )
-        args.eval_interval = None
+    if args.eval_files is None and args.eval_interval > 0:
+        print(f"Warning!!! No eval-files provided but doing the eval, it makes no sense so setting eval_interval to 0")
+        args.eval_interval = 0
 
     assert not (args.kl_coef != 0 and args.kl_loss_coef != 0), "Only one of kl_coef and kl_loss_coef can be set"
 
@@ -814,7 +812,7 @@ def parse_args(add_custom_arguments=None):
         if not args.colocate:
             args.colocate = True
             print("train_type is not rl, use colocate to save GPU memory")
-        if args.train_files == "sft" and args.eval_interval is not None and not args.only_update_weight_on_eval:
+        if args.train_files == "sft" and args.eval_interval > 0 and not args.only_update_weight_on_eval:
             args.only_update_weight_on_eval = True
             print(
                 "Warning: The auto evaluation is set but the the only_update_weight_on_eval is not set"
