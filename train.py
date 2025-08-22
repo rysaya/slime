@@ -47,13 +47,16 @@ def train(args):
     if not args.colocate:
         rollout_data_next_future = rollout_manager.async_generate(args.start_rollout_id)
     # make eval at first step
-    if args.eval_interval is not None:
+    need_eval = args.eval_interval is not None
+    need_on_off_switch = args.colocate and (not args.only_update_weight_on_eval or need_eval)
+    if need_eval:
         ray.get(rollout_manager.async_eval(args.start_rollout_id))
     # note that for async training, one can change the position of the sync operation(ray.get).
     for rollout_id in range(args.start_rollout_id, args.num_rollout):
         if args.colocate:
             rollout_data_curr_ref = ray.get(rollout_manager.async_generate(rollout_id))
-            ray.get(rollout_manager.async_offload())
+            if need_on_off_switch:
+                ray.get(rollout_manager.async_offload())
         else:
             rollout_data_curr_ref = ray.get(rollout_data_next_future)
             if rollout_id + 1 < args.num_rollout:
@@ -67,20 +70,23 @@ def train(args):
             ray.get(
                 actor_model.async_save_model(rollout_id) + [rollout_manager.train_data_loader.save.remote(rollout_id)]
             )
-        if args.colocate:
-            ray.get(actor_model.async_offload() + rollout_manager.async_onload(tags=[GPU_MEMORY_TYPE_WEIGHTS]))
-        else:
-            rollout_data_next_future = ray.wait([rollout_data_next_future], num_returns=1)[0][0]
 
         need_eval = args.eval_interval is not None and (
             (rollout_id + 1) % args.eval_interval == 0
             or (num_rollout_per_epoch is not None and (rollout_id + 1) % num_rollout_per_epoch == 0)
         )
-
-        if not args.only_update_weight_on_eval or need_eval:
-            ray.get(actor_model.async_update_weights())
+        need_on_off_switch = args.colocate and (not args.only_update_weight_on_eval or need_eval)
 
         if args.colocate:
+            if need_on_off_switch:
+                ray.get(actor_model.async_offload() + rollout_manager.async_onload(tags=[GPU_MEMORY_TYPE_WEIGHTS]))
+        else:
+            rollout_data_next_future = ray.wait([rollout_data_next_future], num_returns=1)[0][0]
+
+        if need_on_off_switch:
+            ray.get(actor_model.async_update_weights())
+
+        if need_on_off_switch:
             ray.get(rollout_manager.async_onload(tags=[GPU_MEMORY_TYPE_KV_CACHE]))
 
         if need_eval:

@@ -35,9 +35,7 @@ class SFTDataset(Dataset):
                         tools = data[self.args.tool_key]
                     else:
                         tools = None
-                    input_datas = self.tokenizer.apply_chat_template(
-                        raw_datas, tools, tokenize=False, add_generation_prompt=True
-                    )
+                    input_datas = self.tokenizer.apply_chat_template(raw_datas, tools, tokenize=False)
 
                 # TODO: 换成total len
                 input_ids = self.tokenizer(input_datas)["input_ids"]
