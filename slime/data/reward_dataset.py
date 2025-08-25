@@ -54,7 +54,7 @@ class RewardDataset(Dataset):
 
                 token_ids, loss_mask = self.mask_generator.get_loss_mask(raw_datas)
 
-                cho, rej = self.tokenizer([chosen, rejected])
+                cho, rej = self.tokenizer([chosen, rejected], add_special_tokens=False)
                 chosen_ids, rejected_ids = cho["input_ids"], rej["input_ids"]
                 # TODO: 换成total len
                 if self.args.rollout_max_prompt_len is not None:

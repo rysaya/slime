@@ -233,7 +233,7 @@ slime 支持不同程度的自定义数据生成（rollout）。
           }
       )
   
-      prompt_tokens_ids = TOKENIZER(sample.prompt, add_special_tokens=False)["input_ids"]
+      prompt_tokens_ids = sample["prompt_ids"]
       response_token_ids = TOKENIZER(output["text"], add_special_tokens=False)["input_ids"]
   
       # set sample

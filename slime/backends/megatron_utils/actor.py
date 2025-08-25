@@ -185,9 +185,6 @@ class MegatronTrainRayActor(TrainRayActor):
             Timer().start("train_wait")
             return
 
-        if self.args.colocate:
-            self.wake_up(("model"))
-
         with timer("train"):
             with timer("data_preprocess"):
                 rollout_data = self._get_rollout_data(rollout_data_ref)

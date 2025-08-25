@@ -189,16 +189,6 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                     "This is used to shuffle the prompts and also for the random sampling of the prompts."
                 ),
             )
-            parser.add_argument(
-                "--use-token-output",
-                action="store_true",
-                default=False,
-                help=(
-                    "Use token-based output from SGLang instead of string-based output. "
-                    "This avoids encode/decode overhead and directly stores tokens, "
-                    "which is more efficient for training workflows."
-                ),
-            )
 
             # sampling
             parser.add_argument(
@@ -235,7 +225,7 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
             )
             # update weight
             parser.add_argument(
-                "--only-update-weight-on-eval",
+                "--turn-off-train-update-weights",
                 action="store_true",
                 default=False,
                 help=(
@@ -812,15 +802,15 @@ def parse_args(add_custom_arguments=None):
         if not args.colocate:
             args.colocate = True
             print("train_type is not rl, use colocate to save GPU memory")
-        if args.train_files == "sft" and args.eval_interval > 0 and not args.only_update_weight_on_eval:
-            args.only_update_weight_on_eval = True
+        if args.train_type == "sft" and not args.turn_off_train_update_weights:
+            args.turn_off_train_update_weights = True
             print(
-                "Warning: The auto evaluation is set but the the only_update_weight_on_eval is not set"
+                "Warning: The train_type is SFT but the the turn_off_train_update_weights is not set"
                 + "The weight would be updated on each train, which could be very slow. To avoid it, now turn it on"
             )
         if args.debug_rollout_only:
             raise ValueError("offline training do not use rollout, why you want to debug it???")
-        if args.train_files == "sft" and not args.calculate_per_token_loss:
+        if args.train_type == "sft" and not args.calculate_per_token_loss:
             args.calculate_per_token_loss = True
             print(f"Warning: train_type is sft, but calculate_per_token_loss is not set, now turn it on")
 

@@ -80,7 +80,7 @@ def get_data_iterator(args, model, rollout_data):
             - num_microbatches: Number of microbatches for log probability evaluation.
     """
     num_local_samples = (
-        len(rollout_data["total_lengths"])
+        args.rollout_batch_size
         * args.n_samples_per_prompt
         // mpu.get_data_parallel_world_size(with_context_parallel=False)
     )
@@ -105,6 +105,9 @@ def get_data_iterator(args, model, rollout_data):
         # calculate the number of mirobatches for each step
         cp_size = mpu.get_context_parallel_world_size()
         samples = rollout_data["total_lengths"]
+        assert (
+            len(samples) == num_local_samples
+        ), f"len(samples): {len(samples)} != num_local_samples: {num_local_samples}"
         num_microbatches = []
         for i in range(num_steps_per_rollout):
             start, end = i * num_local_gbs, (i + 1) * num_local_gbs
@@ -200,7 +203,7 @@ def log_rollout_data(rollout_id, args, rollout_data):
                 reduced_log_dict["rollout/step"] = (
                     rollout_id
                     if not args.wandb_always_use_train_step
-                    else rollout_id * len(total_lengths) // args.global_batch_size
+                    else rollout_id * args.rollout_batch_size * args.n_samples_per_prompt // args.global_batch_size
                 )
                 wandb.log(reduced_log_dict)
         else:
@@ -282,7 +285,7 @@ def log_passrate(rollout_id, args, rollout_data):
                 continue
 
             group_size = args.n_samples_per_prompt
-            group_number = len(val) // group_size
+            group_number = args.rollout_batch_size
             assert len(val) % group_size == 0, f"len(samples): {len(val)} is not divisible by group_size: {group_size}"
             pass_rate_name_list = [2**i for i in range(int(math.log2(group_size)) + 1)]
 

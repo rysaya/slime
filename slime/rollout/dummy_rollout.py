@@ -1,4 +1,4 @@
-def generate_rollout(args, sample_group, tokenizer, sampling_params, aborted=False):
+async def generate_rollout(args, sample_group, tokenizer, sampling_params):
     """
     Dummy rollout function that does nothing except printing the sample
     This is used when the actual rollout logic is not needed.

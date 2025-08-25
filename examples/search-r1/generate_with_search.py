@@ -95,7 +95,7 @@ async def generate(args, tokenizer, sample, sampling_params) -> Sample:
 
     # Handle partial rollout samples: continue generation from existing response
     prompt = sample["prompt"]
-    prompt_tokens_ids = tokenizer(prompt, add_special_tokens=False)["input_ids"]
+    prompt_tokens_ids = sample["prompt_ids"]
     response = ""
     response_token_ids = []
     loss_masks = []

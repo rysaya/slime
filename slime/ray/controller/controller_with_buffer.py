@@ -1,6 +1,7 @@
 import asyncio
 import logging
 from pathlib import Path
+from copy import deepcopy
 from tqdm import tqdm
 
 import ray
@@ -8,7 +9,7 @@ import torch
 
 from slime.data import dummy_convert_func
 from slime.utils.http_utils import post, get
-from slime.utils.types import Sample
+from slime.utils.types import Sample, GenerateState
 from slime.utils.async_utils import run
 from slime.utils.ray_utils import Box
 from .controller import RolloutControllerBase, dummy_log_func
@@ -33,7 +34,7 @@ class RolloutControllerWithBuffer(RolloutControllerBase):
     ):
         super().__init__(args, tag, wandb_run_id, datasource_cls, rollout_function_path, post_process_func, log_func)
         self.buffer = []
-        self.aborted = False
+        self.gen_state = GenerateState()
 
     def generate(self, rollout_id):
         # TODO 先留你不杀
@@ -81,7 +82,7 @@ class RolloutControllerWithBuffer(RolloutControllerBase):
                     if sample_idx is not None:
                         s.set_index(sample_idx)
                 task = asyncio.create_task(
-                    self.generate_func(self.args, sample, self.tokenizer, self.sampling_paras, self.aborted)
+                    self.generate_func(self.args, sample, self.tokenizer, deepcopy(self.sampling_paras))
                 )
                 tasks.add(task)
 
@@ -89,7 +90,7 @@ class RolloutControllerWithBuffer(RolloutControllerBase):
             for sample in self.buffer:
                 submit_sample(sample)
 
-            for _ in range(self.rollout_batch_size):
+            for _ in range(self.rollout_batch_size - len(self.buffer)):
                 sample = self.data_source.get_sample()
                 if sample is None:
                     break
@@ -135,22 +136,25 @@ class RolloutControllerWithBuffer(RolloutControllerBase):
 
         if len(results) != self.rollout_batch_size:
             print(
-                f"{self.tag}: Warning! Sample Num less than batch size. Got {len(results)} samples, expected {self.rollout_batch_size}"
+                f"{self.tag}: Warning! Sample Num not same as batch size. Got {len(results)} samples, expected {self.rollout_batch_size}"
             )
         results = sorted(results, key=lambda group: group[0]["index"])
+
+        # TODO: 这里暂时先截断rollout_batch_size数量，megatron那边sample分配debug还没成功，等成功再撤
+        results = results[: self.rollout_batch_size]
 
         # flatten the data if it is a list of lists
         if isinstance(results[0], list):
             results = sum(results, [])
         self.buffer_append(aborted_samples)
         # reset the aborted state to prevent effects on the next rollout or eval.
-        self.aborted = False
+        self.gen_state.reset()
         return results
 
     async def abort(self, pendings, rollout_id: int):
         aborted_samples = []
 
-        self.aborted = True
+        self.gen_state.abort()
         list_workers_resp = await get(
             f"http://{self.args.sglang_router_ip}:{self.args.sglang_router_port}/list_workers",
             use_http2=self.args.use_http2,

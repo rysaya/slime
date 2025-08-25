@@ -48,7 +48,7 @@ def train(args):
         rollout_data_next_future = rollout_manager.async_generate(args.start_rollout_id)
     # make eval at first step
     need_eval = args.eval_interval > 0
-    need_on_off_switch = args.colocate and (not args.only_update_weight_on_eval or need_eval)
+    need_on_off_switch = args.colocate
     if need_eval:
         ray.get(rollout_manager.async_eval(args.start_rollout_id))
     # note that for async training, one can change the position of the sync operation(ray.get).
@@ -56,7 +56,7 @@ def train(args):
         if args.colocate:
             rollout_data_curr_ref = ray.get(rollout_manager.async_generate(rollout_id))
             if need_on_off_switch:
-                ray.get(rollout_manager.async_offload())
+                ray.get(rollout_manager.async_offload() + actor_model.async_onload())
         else:
             rollout_data_curr_ref = ray.get(rollout_data_next_future)
             if rollout_id + 1 < args.num_rollout:
@@ -75,8 +75,7 @@ def train(args):
             (rollout_id + 1) % args.eval_interval == 0
             or (num_rollout_per_epoch is not None and (rollout_id + 1) % num_rollout_per_epoch == 0)
         )
-        need_on_off_switch = args.colocate and (not args.only_update_weight_on_eval or need_eval)
-
+        need_on_off_switch = args.colocate and (not args.turn_off_train_update_weights or need_eval)
         if args.colocate:
             if need_on_off_switch:
                 ray.get(actor_model.async_offload() + rollout_manager.async_onload(tags=[GPU_MEMORY_TYPE_WEIGHTS]))

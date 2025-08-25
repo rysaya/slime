@@ -92,14 +92,16 @@ class RolloutDataset(Dataset):
                         prompt, tools, tokenize=False, add_generation_prompt=True
                     )
 
+                prompt_ids = self.tokenizer(prompt, add_special_tokens=False)["input_ids"]
                 if self.args.rollout_max_prompt_len is not None:
-                    if len(self.tokenizer(prompt)["input_ids"]) > self.args.rollout_max_prompt_len:
+                    if len(prompt_ids) > self.args.rollout_max_prompt_len:
                         continue
 
                 self.origin_samples.append(
                     Sample(
                         prompt=prompt,
                         response="",
+                        prompt_ids=prompt_ids,
                         data_source=data.get(self.args.datasource_key, name),
                         label=data[self.args.label_key] if self.args.label_key is not None else None,
                         status=SampleStatus.PENDING,

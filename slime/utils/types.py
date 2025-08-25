@@ -3,6 +3,7 @@ from dataclasses import dataclass
 from enum import Enum
 
 import torch
+from slime.utils.misc import SingletonMeta
 
 
 class SampleStatus(Enum):
@@ -10,6 +11,20 @@ class SampleStatus(Enum):
     COMPLETED = "completed"
     TRUNCATED = "truncated"
     ABORTED = "aborted"
+
+
+class GenerateState(metaclass=SingletonMeta):
+    def __init__(self):
+        self.aborted = False
+
+    def abort(self):
+        self.aborted = True
+
+    def reset(self):
+        self.aborted = False
+
+    def is_aborted(self):
+        return self.aborted
 
 
 class Sample(UserDict):

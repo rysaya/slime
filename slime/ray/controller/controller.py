@@ -2,6 +2,7 @@ import asyncio
 import logging
 import wandb
 import ray
+from copy import deepcopy
 from tqdm import tqdm
 from transformers import AutoTokenizer
 
@@ -104,7 +105,9 @@ class RolloutControllerBase:
                     s.set_rollout_id(rollout_id)
                     if sample_idx is not None:
                         s.set_index(sample_idx)
-                task = asyncio.create_task(self.generate_func(self.args, sample, self.tokenizer, self.sampling_paras))
+                task = asyncio.create_task(
+                    self.generate_func(self.args, sample, self.tokenizer, deepcopy(self.sampling_paras))
+                )
                 tasks.add(task)
 
             for _ in range(self.rollout_batch_size):
