@@ -215,6 +215,17 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 ),
             )
             parser.add_argument(
+                "--buffer-size-frac",
+                type=float,
+                default=0.5,
+                help=(
+                    "The buffer size fraction for the partial rollout compared with rollout batch size. "
+                    "No effect if no '--partial-rollout'. Could be any var > 0 but suggest to be around 0-1 "
+                    "Could be tuned to speedup the rollout. Small value would cause bubble on rollout engine usage efficiency."
+                    "But large value would increase the abort time, GPU memory usage and may face OOM issue. "
+                ),
+            )
+            parser.add_argument(
                 "--custom-generate-function-path",
                 type=str,
                 default=None,
@@ -241,6 +252,11 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                     "buffer size for update weight, in bytes. "
                     "This is used for updating weights by chunk and should be useful for MoE models."
                 ),
+            )
+            parser.add_argument(
+                "--keep-old-actor",
+                action="store_true",
+                help="Whether to keep the rollout model on training process",
             )
             parser.add_argument(
                 "--rollout-data-postprocess-path",

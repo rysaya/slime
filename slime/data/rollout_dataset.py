@@ -1,12 +1,11 @@
 import copy
 import torch
-from typing import Union
 from slime.data.dataset import Dataset, read_file
 from slime.utils.types import Sample, SampleStatus
 from slime.data.templates import get_chat_template
 
 
-def convert_rl_samples_to_train(args, samples: Union[list[Sample], list[list[Sample]]]):
+def convert_rl_samples_to_train(args, samples: list[Sample]):
     """
     Convert inference generated samples to training data.
     """
@@ -56,7 +55,7 @@ def convert_rl_samples_to_train(args, samples: Union[list[Sample], list[list[Sam
     return train_data
 
 
-def convert_eval_samples_to_metrix(args, samples: Union[list[Sample], list[list[Sample]]]):
+def convert_eval_samples_to_metrix(args, samples: list[Sample]):
     eval_metrics = {}
 
     for s in samples:

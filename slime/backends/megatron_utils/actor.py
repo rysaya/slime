@@ -139,6 +139,7 @@ class MegatronTrainRayActor(TrainRayActor):
 
         clear_memory()
         print_memory(f"before offload model")
+        self.update_cpu_params_dict(self.weights["actor"])
         if hasattr(mpu, "destroy_process_groups"):
             mpu.destroy_process_groups()
 
@@ -228,12 +229,15 @@ class MegatronTrainRayActor(TrainRayActor):
 
                 rollout_data.update(
                     self.compute_log_prob(
-                        "actor",
+                        "old_actor" if self.args.keep_old_actor else "actor",
                         data_iterator,
                         num_microbatches,
                         store_prefix="",
                     )
                 )
+                # when there is old actor, we need to update the model params to actor manually
+                if "old_actor" in self.weights:
+                    self.update_gpu_params_dict(self.weights["actor"])
 
                 # Calculate adv and returns. Need to performed before training (instead of on the fly),
                 # because we may need normalize the whole rollout.
@@ -283,8 +287,8 @@ class MegatronTrainRayActor(TrainRayActor):
                 path,
             )
 
-        # update the cpu actor weight to the latest model
-        self.update_cpu_params_dict(self.weights["actor"])
+        # Why we need this? Like SFT/RM? Now use old approch
+        # self.update_cpu_params_dict(self.weights["actor"])
 
         log_perf_data(rollout_id, self.args)
         Timer().start("train_wait")
@@ -308,6 +312,9 @@ class MegatronTrainRayActor(TrainRayActor):
     def update_weights(self):
         if self.rollout_engines is None:
             return
+
+        if not self.args.colocate:
+            self.update_cpu_params_dict(self.weights["actor"])
 
         if self.args.colocate and hasattr(mpu, "reload_process_groups"):
             mpu.reload_process_groups()

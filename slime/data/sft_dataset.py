@@ -1,11 +1,10 @@
-from typing import Union
 from slime.data.dataset import Dataset, read_file
 from slime.utils.types import Sample
 from slime.data.templates import get_chat_template
 from slime.utils.mask_utils import MultiTurnLossMaskGenerator
 
 
-def convert_sft_samples_to_train(args, samples: Union[list[Sample], list[list[Sample]]]):
+def convert_sft_samples_to_train(args, samples: list[Sample]):
     """
     Convert sft samples to training data.
     """

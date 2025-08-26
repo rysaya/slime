@@ -36,7 +36,7 @@ class Sample(UserDict):
     def to_dict(self):
         if "status" in self:
             value = self.data.copy()
-            value["status"] = self.status.value
+            value["status"] = self["status"].value
             return value
         return self.data
 

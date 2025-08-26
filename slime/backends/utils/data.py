@@ -76,7 +76,8 @@ def process_rollout_data(args, rollout_data_ref, dp_rank, dp_size):
         data = data[0]
 
     # save the unprocessed reward for logging
-    rollout_data["raw_reward"] = data["raw_reward"]
+    if "raw_reward" in data:
+        rollout_data["raw_reward"] = data["raw_reward"]
 
     total_lengths = [len(t) for t in data["tokens"]]
     data["total_lengths"] = total_lengths

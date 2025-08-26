@@ -56,6 +56,7 @@ def train(args):
         if args.colocate:
             rollout_data_curr_ref = ray.get(rollout_manager.async_generate(rollout_id))
             if need_on_off_switch:
+                # TODO: face OOm issue when merging these two ray get. Split them and debug later
                 ray.get(rollout_manager.async_offload())
                 ray.get(actor_model.async_onload())
         else:
@@ -86,8 +87,6 @@ def train(args):
 
         if need_on_off_switch:
             ray.get(actor_model.async_update_weights())
-
-        if need_on_off_switch:
             ray.get(rollout_manager.async_onload(tags=[GPU_MEMORY_TYPE_KV_CACHE]))
 
         if need_eval:

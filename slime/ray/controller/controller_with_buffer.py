@@ -35,6 +35,8 @@ class RolloutControllerWithBuffer(RolloutControllerBase):
         super().__init__(args, tag, wandb_run_id, datasource_cls, rollout_function_path, post_process_func, log_func)
         self.buffer = []
         self.gen_state = GenerateState()
+        assert self.args.buffer_size_frac >= 0, "buffer_size_frac must be non-negative"
+        self.over_sample_batch_size = int((1 + self.args.buffer_size_frac) * self.rollout_batch_size + 0.5)
 
     def generate(self, rollout_id):
         # TODO 先留你不杀
@@ -60,12 +62,11 @@ class RolloutControllerWithBuffer(RolloutControllerBase):
     方法：
     1. 先往生产者里塞一个rollout batch size的数据
     2. 当一个没通过dynamatic filter，就往里面再塞一个
-    3. 如果一个pass了dynamatic filter，就有1/2概率往里面再塞一个，防止长尾半天出不来
-    4. xxx概率可以不用random，直接看已完成的len(data)判断，比如1/2的话就是看其是奇数还是偶数就行
+    3. 如果一个pass了dynamatic filter，且buffer还没满，那就再往里面再塞一个，防止长尾半天出不来
+    4. buffer相对rollout batch size的比例通过--buffer-size-frac来调节(默认0.5)
     """
 
     async def generate_rollout_async(self, rollout_id: int):
-        # TODO add a better over-sampling strategy back
         results = []
         sample_idx = 1
         pbar = tqdm(total=self.rollout_batch_size, desc=f"{self.tag} Rollout generation")
@@ -97,6 +98,9 @@ class RolloutControllerWithBuffer(RolloutControllerBase):
                 submit_sample(sample, sample_idx=sample_idx)
                 sample_idx += 1
 
+            # clear buffer for next rollout
+            self.buffer = []
+
             # 按顺序收集结果
             while len(results) < self.rollout_batch_size and len(tasks) > 0:
                 # wait for the generation to finish
@@ -114,8 +118,8 @@ class RolloutControllerWithBuffer(RolloutControllerBase):
                         new_task_nums += 1
                     else:
                         new_done_results.append(group)
-                        # passed the dynamic_filter, if the total done_results is odds, add a new task into the queue
-                        if (len(results) + len(new_done_results)) % 2 == 0:
+                        # if the buffer is expecting not full, add a new task into the queue
+                        if len(results) + len(tasks) + new_task_nums < self.over_sample_batch_size:
                             new_task_nums += 1
 
                 # submit new generations, TODO: better refactor

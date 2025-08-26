@@ -167,7 +167,6 @@ class RolloutManager:
         data_loader_cls = RolloutControllerWithBuffer if args.partial_rollout else RolloutController
         dataset_cls, post_process_func = self._get_train_cls_funcs()
 
-        # TODO make RolloutDataset to configurable cls load
         self.train_data_loader = data_loader_cls.options(
             num_cpus=1,
             num_gpus=0,
