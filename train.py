@@ -56,7 +56,8 @@ def train(args):
         if args.colocate:
             rollout_data_curr_ref = ray.get(rollout_manager.async_generate(rollout_id))
             if need_on_off_switch:
-                ray.get(rollout_manager.async_offload() + actor_model.async_onload())
+                ray.get(rollout_manager.async_offload())
+                ray.get(actor_model.async_onload())
         else:
             rollout_data_curr_ref = ray.get(rollout_data_next_future)
             if rollout_id + 1 < args.num_rollout:
@@ -78,7 +79,8 @@ def train(args):
         need_on_off_switch = args.colocate and (not args.turn_off_train_update_weights or need_eval)
         if args.colocate:
             if need_on_off_switch:
-                ray.get(actor_model.async_offload() + rollout_manager.async_onload(tags=[GPU_MEMORY_TYPE_WEIGHTS]))
+                ray.get(actor_model.async_offload())
+                ray.get(rollout_manager.async_onload(tags=[GPU_MEMORY_TYPE_WEIGHTS]))
         else:
             rollout_data_next_future = ray.wait([rollout_data_next_future], num_returns=1)[0][0]
 
