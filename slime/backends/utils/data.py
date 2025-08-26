@@ -75,6 +75,9 @@ def process_rollout_data(args, rollout_data_ref, dp_rank, dp_size):
         dist.broadcast_object_list(data, src=0)
         data = data[0]
 
+    # save the unprocessed reward for logging
+    rollout_data["raw_reward"] = data["raw_reward"]
+
     total_lengths = [len(t) for t in data["tokens"]]
     data["total_lengths"] = total_lengths
 
@@ -121,6 +124,8 @@ def process_rollout_data(args, rollout_data_ref, dp_rank, dp_size):
         "truncated",
         "loss_masks",
         "round_number",
+        "sample_indices",
+        "rollout_log_probs",
     ]:
         if key not in data:
             continue

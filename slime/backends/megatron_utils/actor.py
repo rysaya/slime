@@ -62,6 +62,13 @@ class MegatronTrainRayActor(TrainRayActor):
         if with_ref:
             self.load_other_checkpoint("ref", args.ref_load)
 
+        if self.args.keep_old_actor:
+            # Load old_actor checkpoint
+            self.load_other_checkpoint("old_actor", args.load)
+            # Create rollout_actor as a copy of current actor
+            self.weights["rollout_actor"] = {}
+            self.update_cpu_params_dict(self.weights["rollout_actor"])
+
         update_weight_cls = UpdateWeightFromTensor if self.args.colocate else UpdateWeightFromDistributed
         self.weight_updator = update_weight_cls(
             self.args,
@@ -87,6 +94,23 @@ class MegatronTrainRayActor(TrainRayActor):
             from slime.utils.misc import load_function
 
             self.rollout_data_postprocess = load_function(self.args.rollout_data_postprocess_path)
+
+        self.prof = None
+        if args.use_pytorch_profiler and torch.distributed.get_rank() == 0:
+            self.prof = torch.profiler.profile(
+                schedule=torch.profiler.schedule(
+                    wait=max(args.profile_step_start - 1, 0),
+                    warmup=1 if args.profile_step_start > 0 else 0,
+                    active=args.profile_step_end - args.profile_step_start,
+                    repeat=1,
+                ),
+                on_trace_ready=torch.profiler.tensorboard_trace_handler(args.tensorboard_dir),
+                record_shapes=True,
+                with_stack=True,
+                profile_memory=True,
+                with_flops=True,
+            )
+            self.prof.start()
 
         Timer().start("train_wait")
         return start_rollout_id
@@ -115,7 +139,6 @@ class MegatronTrainRayActor(TrainRayActor):
 
         clear_memory()
         print_memory(f"before offload model")
-        self.update_cpu_params_dict(self.weights["actor"])
         if hasattr(mpu, "destroy_process_groups"):
             mpu.destroy_process_groups()
 
@@ -221,6 +244,9 @@ class MegatronTrainRayActor(TrainRayActor):
 
             log_rollout_data(rollout_id, self.args, rollout_data)
 
+            if self.args.use_pytorch_profiler and torch.distributed.get_rank() == 0 and self.prof is not None:
+                self.prof.step()
+
             # Train
             with timer("actor_train"):
                 train(
@@ -231,6 +257,16 @@ class MegatronTrainRayActor(TrainRayActor):
                     data_iterator,
                     num_microbatches,
                 )
+
+            # Profiling.
+            if (
+                self.args.use_pytorch_profiler
+                and rollout_id == self.args.profile_step_end
+                and torch.distributed.get_rank() == 0
+                and self.prof is not None
+            ):
+                self.prof.stop()
+                self.prof = None
 
         # TODO extract to a function during refactor
         if (path_template := self.args.save_debug_train_data) is not None:
@@ -246,6 +282,9 @@ class MegatronTrainRayActor(TrainRayActor):
                 ),
                 path,
             )
+
+        # update the cpu actor weight to the latest model
+        self.update_cpu_params_dict(self.weights["actor"])
 
         log_perf_data(rollout_id, self.args)
         Timer().start("train_wait")
@@ -277,6 +316,15 @@ class MegatronTrainRayActor(TrainRayActor):
             print_memory("before update_weights")
             self.weight_updator.update_weights()
             print_memory("after update_weights")
+
+            if getattr(self.args, "keep_old_actor", False):
+                print("updating model queue: rollout_actor -> old_actor, actor -> rollout_actor")
+                # Queue-style update: rollout_actor params -> old_actor, actor params -> rollout_actor
+                # First copy rollout_actor to old_actor
+                for name in self.weights["old_actor"]:
+                    self.weights["old_actor"][name].copy_(self.weights["rollout_actor"][name])
+                # Then copy current actor to rollout_actor
+                self.update_cpu_params_dict(self.weights["rollout_actor"])
 
         if self.args.colocate and hasattr(mpu, "destroy_process_groups"):
             mpu.destroy_process_groups()
