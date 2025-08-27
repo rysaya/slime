@@ -6,23 +6,18 @@ from slime.data.templates import get_chat_template
 def convert_rm_samples_to_train(args, samples: list[Sample]):
     """
     Convert rm samples to training data.
-    output_samples token is: [ prompt_ids + chosen_resp_ids + prompt_ids + rejected_resp_ids]
-    response part is: [ chosen_resp_ids + prompt_ids + rejected_resp_ids]
+    output_samples token is: [ chosen_ids + rejected_ids]
+    response part is: [ 1 + (rejected_ids - 1) + 1]
     the sub_samples_idx is specially for data packing cu_seq_len
-    loss_mask is [[1] * len(chosen_resp_ids) + [0] * len(prompt_ids) + [1] * len(rejected_resp_ids)]
+    loss_mask is [[1] * 1 + [0] * (len(rejected_ids) - 1) + [1] * 1]
     """
 
     train_data = {
-        "tokens": [],
-        "response_lengths": [],
-        "loss_masks": [],
+        "tokens": [sample["chosen_ids"] + sample["rejected_ids"] for sample in samples],
+        "response_lengths": [1 + len(sample["rejected_ids"]) for sample in samples],
+        "loss_masks": [[1] + [0] * (len(sample["rejected_ids"]) - 1) + [1] for sample in samples],
         "sub_samples_idx": [[0, len(sample["chosen_ids"])] for sample in samples],
     }
-    for sample in samples:
-        cho_len, rej_len, prompt_len = len(sample["chosen_ids"]), len(sample["rejected_ids"]), sample["prompt_len"]
-        train_data["tokens"].append(sample["chosen_ids"] + sample["rejected_ids"])
-        train_data["response_lengths"].append(cho_len - prompt_len + rej_len)
-        train_data["loss_masks"].append([1] * (cho_len - prompt_len) + [0] * prompt_len + [1] * (rej_len - prompt_len))
     return train_data
 
 
@@ -60,11 +55,6 @@ class RewardDataset(Dataset):
                     rejected_ids = self.tokenizer.apply_chat_template(
                         rej_mes, tools, tokenize=True, return_tensors="pt"
                     )
-                    prompt_len = len(
-                        self.tokenizer.apply_chat_template(
-                            raw_datas[:-1], tools, tokenize=True, add_generation_prompt=True, return_tensors="pt"
-                        )
-                    )
 
                 # TODO: 换成total len
                 if self.args.rollout_max_prompt_len is not None:
@@ -75,7 +65,6 @@ class RewardDataset(Dataset):
                     Sample(
                         chosen_ids=chosen_ids,
                         rejected_ids=rejected_ids,
-                        prompt_len=prompt_len,
                         data_source=data.get(self.args.datasource_key, name),
                         raw_messages=raw_datas,
                         metadata=data.get(self.args.metadata_key) or {},
