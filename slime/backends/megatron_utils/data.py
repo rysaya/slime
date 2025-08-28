@@ -24,7 +24,29 @@ def get_batch(data_iterator, keys):
     batch = data_iterator.get_next(keys)
 
     packed_seq_params = None
-    tokens = batch["tokens"]
+    # we already pass the pack stage. Now if it is a collect of sequences, split them apart
+    if batch.get("sub_samples_idx", None) is not None:
+        tokens = []
+        loss_masks = []
+        response_lens = []
+        for t, idx in zip(batch["tokens"], batch["sub_samples_idx"]):
+            for i in range(len(idx)):
+                if i == len(idx) - 1:
+                    tokens.append(t[idx[-1] :])
+                else:
+                    tokens.append(t[idx[i] : idx[i + 1]])
+        batch["total_lengths"] = [len(t) for t in tokens]
+        for resp_len, l_mask in zip(batch["response_lengths"], batch["loss_masks"]):
+            cu_resp_len = 0
+            for i in range(len(resp_len)):
+                r_len = resp_len[i]
+                loss_masks.append(l_mask[cu_resp_len : cu_resp_len + r_len])
+                response_lens.append(r_len)
+                cu_resp_len += r_len
+        batch["response_lengths"] = response_lens
+        batch["loss_masks"] = loss_masks
+    else:
+        tokens = batch["tokens"]
     # use 0 as the pad token id should be fine?
     pad_token_id = 0
 
@@ -177,6 +199,10 @@ def log_rollout_data(rollout_id, args, rollout_data):
                         val = cp_size * sum_of_sample_mean(val) / len(loss_masks)
                     else:
                         val = val.mean() * cp_size
+                elif isinstance(val[0], list):
+                    while len(val) > 0 and isinstance(val[0], list):
+                        val = sum(val, [])
+                    val = sum(val) / len(val)
                 else:
                     val = sum(val) / len(val)
             elif isinstance(val, torch.Tensor):

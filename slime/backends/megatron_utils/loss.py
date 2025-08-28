@@ -37,6 +37,48 @@ def calculate_log_probs_and_entropy(logits, tokens, with_entropy: bool = False):
     return log_prob, entropy
 
 
+def get_logits(
+    logits: torch.Tensor,
+    *,
+    args,
+    total_lengths: list[int],
+    response_lengths: list[int],
+) -> list[torch.Tensor]:
+    assert logits.size(0) == 1, f"{logits.shape}"
+    assert logits.dtype == torch.float32, f"{logits.dtype}"
+
+    logits = logits.squeeze(0)
+    logits = logits.div(args.rollout_temperature)
+
+    cp_size = mpu.get_context_parallel_world_size()
+
+    logits_list = []
+    end = 0
+    for total_length, response_length in zip(total_lengths, response_lengths):
+        if cp_size == 1:
+            end += total_length
+            start = end - response_length
+            logits_chunk = logits[start - 1 : end - 1]
+        else:
+            chunk_size, chunks_offset, logits_offset, tokens_offset = get_logits_and_tokens_offset_with_cp(
+                total_length, response_length
+            )
+
+            logits_0, logits_1 = logits[end : end + chunk_size], logits[end + chunk_size : end + 2 * chunk_size]
+            logits_0 = logits_0[logits_offset[0][0] - chunks_offset[0][0] : logits_offset[0][1] - chunks_offset[0][0]]
+            logits_1 = logits_1[logits_offset[1][0] - chunks_offset[1][0] : logits_offset[1][1] - chunks_offset[1][0]]
+
+            logits_chunk = torch.cat([logits_0, logits_1], dim=0)
+
+            end += 2 * chunk_size
+        logits_list.append(logits_chunk)
+    full_logits = [
+        all_gather_with_cp(log_prob, total_length, response_length)
+        for log_prob, total_length, response_length in zip(logits_list, total_lengths, response_lengths)
+    ]
+    return full_logits
+
+
 def get_log_probs_and_entropy(
     logits: torch.Tensor,
     *,
@@ -387,6 +429,50 @@ def sft_loss_function(args, batch, logits, sum_of_sample_mean):
     )
 
 
+def bradly_terry_loss_function(args, batch, logits, sum_of_sample_mean):
+    response_lengths = batch["response_lengths"]
+    total_lengths = batch["total_lengths"]
+    loss_masks = batch["loss_masks"]
+
+    concated_logits = get_logits(logits, args=args, total_lengths=total_lengths, response_lengths=response_lengths)
+    losses = []
+    for logi, mask in zip(concated_logits, loss_masks):
+        # TODO: [:, 1000] is for debug before model is complete!!!!, need to remove later!!!
+        cho_rej_logits = logi[mask.bool()][:, 1000]
+        losses.append(cho_rej_logits)
+    losses = torch.stack(losses, dim=0).view(-1, 2)
+    loss = -torch.nn.functional.logsigmoid(losses[:, 0] - losses[:, 1]).mean()
+
+    return (
+        loss,
+        {
+            "loss": loss.clone().detach(),
+        },
+    )
+
+
+def log_exp_pair_wise_loss(args, batch, logits, sum_of_sample_mean):
+    response_lengths = batch["response_lengths"]
+    total_lengths = batch["total_lengths"]
+    loss_masks = batch["loss_masks"]
+
+    concated_logits = get_logits(logits, args=args, total_lengths=total_lengths, response_lengths=response_lengths)
+    losses = []
+    for logi, mask in zip(concated_logits, loss_masks):
+        # TODO: [:, 1000] is for debug before model is complete!!!!, need to remove later!!!
+        cho_rej_logits = logi[mask.bool()][:, 1000]
+        losses.append(cho_rej_logits)
+    losses = torch.stack(losses, dim=0).view(-1, 2)
+    loss = torch.log(1 + torch.exp(losses[:, 1] - losses[:, 0])).mean()
+
+    return (
+        loss,
+        {
+            "loss": loss.clone().detach(),
+        },
+    )
+
+
 def loss_function(args, batch, num_microbatches, logits):
     num_tokens = sum(batch["response_lengths"])
     num_samples = len(batch["response_lengths"])
@@ -414,7 +500,7 @@ def loss_function(args, batch, num_microbatches, logits):
         elif args.train_type == "sft":
             loss, log = sft_loss_function(**loss_function_kwargs)
         elif args.train_type == "rm":
-            raise ValueError(f"Currently not implemented RM loss")
+            loss, log = bradly_terry_loss_function(**loss_function_kwargs)
         else:
             raise ValueError(f"Unknown train type: {args.train_type}")
 

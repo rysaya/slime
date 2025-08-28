@@ -1,5 +1,6 @@
 from slime.utils.types import Sample
 from slime.data.dataset import Dataset, read_file
+import torch
 from slime.data.templates import get_chat_template
 
 
@@ -13,9 +14,9 @@ def convert_rm_samples_to_train(args, samples: list[Sample]):
     """
 
     train_data = {
-        "tokens": [sample["chosen_ids"] + sample["rejected_ids"] for sample in samples],
-        "response_lengths": [1 + len(sample["rejected_ids"]) for sample in samples],
-        "loss_masks": [[1] + [0] * (len(sample["rejected_ids"]) - 1) + [1] for sample in samples],
+        "tokens": [torch.cat([sample["chosen_ids"], sample["rejected_ids"]]) for sample in samples],
+        "response_lengths": [[1, 1] for _ in samples],
+        "loss_masks": [[1, 1] for _ in samples],
         "sub_samples_idx": [[0, len(sample["chosen_ids"])] for sample in samples],
     }
     return train_data
@@ -51,10 +52,12 @@ class RewardDataset(Dataset):
                     # TODO: This is kind of stupid, find a better tokenizer ids generation method
                     cho_mes = raw_datas[:-1] + [{"role": "assistant", "content": raw_datas[-1]["chosen"]}]
                     rej_mes = raw_datas[:-1] + [{"role": "assistant", "content": raw_datas[-1]["rejected"]}]
-                    chosen_ids = self.tokenizer.apply_chat_template(cho_mes, tools, tokenize=True, return_tensors="pt")
+                    chosen_ids = self.tokenizer.apply_chat_template(
+                        cho_mes, tools, tokenize=True, return_tensors="pt"
+                    )[0]
                     rejected_ids = self.tokenizer.apply_chat_template(
                         rej_mes, tools, tokenize=True, return_tensors="pt"
-                    )
+                    )[0]
 
                 # TODO: 换成total len
                 if self.args.rollout_max_prompt_len is not None:

@@ -79,8 +79,14 @@ def process_rollout_data(args, rollout_data_ref, dp_rank, dp_size):
     if "raw_reward" in data:
         rollout_data["raw_reward"] = data["raw_reward"]
 
-    total_lengths = [len(t) for t in data["tokens"]]
-    data["total_lengths"] = total_lengths
+    if "total_lengths" not in data:
+        total_lengths = [len(t) for t in data["tokens"]]
+        data["total_lengths"] = total_lengths
+    else:
+        total_lengths = data["total_lengths"]
+        # flatten the total lengths for logging
+        while len(total_lengths) > 0 and isinstance(total_lengths[0], list):
+            total_lengths = sum(total_lengths, [])
 
     # save the seqlen of the whole rollout batch
     Timer().seq_lens = total_lengths
@@ -126,6 +132,7 @@ def process_rollout_data(args, rollout_data_ref, dp_rank, dp_size):
         "loss_masks",
         "round_number",
         "sample_indices",
+        "sub_samples_idx",
         "rollout_log_probs",
     ]:
         if key not in data:
