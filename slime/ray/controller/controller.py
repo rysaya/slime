@@ -3,6 +3,7 @@ import logging
 import wandb
 import ray
 from copy import deepcopy
+from time import time
 from tqdm import tqdm
 from transformers import AutoTokenizer
 
@@ -18,13 +19,40 @@ logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("httpcore").setLevel(logging.WARNING)
 
 
-def log_eval_data(rollout_id, args, data):
+def dummy_log_func(rollout_id, args, samples, rollout_time):
+    return
+
+
+def log_rollout_data(rollout_id, args, samples, rollout_time):
+    if args.load_debug_rollout_data:
+        return
+
     log_dict = {}
-    for key in data.keys():
-        rewards = data[key]["rewards"]
+    log_dict["perf/rollout_time"] = rollout_time
+    response_lengths = [
+        sum(sample["loss_mask"]) if sample.get("loss_mask", None) is not None else sample["response_length"]
+        for sample in samples
+    ]
+    if args.rollout_num_gpus is not None:
+        log_dict["perf/tokens_per_gpu_per_sec"] = sum(response_lengths) / rollout_time / args.rollout_num_gpus
+    log_dict["perf/longest_sample_tokens_per_sec"] = max(response_lengths) / rollout_time
+    print(f"perf {rollout_id}: {log_dict}")
+    if args.use_wandb:
+        log_dict["rollout/step"] = (
+            rollout_id
+            if not args.wandb_always_use_train_step
+            else rollout_id * args.rollout_batch_size * args.n_samples_per_prompt // args.global_batch_size
+        )
+        wandb.log(log_dict)
+
+
+def log_eval_data(rollout_id, args, samples, rollout_time):
+    log_dict = {"eval/rollout_time": rollout_time}
+    for key in samples.keys():
+        rewards = samples[key]["rewards"]
         log_dict[f"eval/{key}"] = sum(rewards) / len(rewards)
-        if "truncated" in data[key]:
-            truncated = data[key]["truncated"]
+        if "truncated" in samples[key]:
+            truncated = samples[key]["truncated"]
             log_dict[f"eval/{key}-truncated_ratio"] = sum(truncated) / len(truncated)
 
     print(f"eval {rollout_id}: {log_dict}")
@@ -42,10 +70,6 @@ def pop_first(args, buffer: list[list[Sample]], num_samples: int = -1) -> list[l
     samples = buffer[:num_to_pop]
     del buffer[:num_to_pop]
     return samples
-
-
-def dummy_log_func(rollout_id, args, data):
-    return
 
 
 class RolloutControllerBase:
@@ -84,9 +108,10 @@ class RolloutControllerBase:
         return len(self.data_source) // self.rollout_batch_size
 
     def generate(self, rollout_id):
+        start_time = time()
         data = run(self.generate_rollout_async(rollout_id))
         data = self.post_process_func(self.args, data)
-        self.log_func(rollout_id, self.args, data)
+        self.log_func(rollout_id, self.args, data, time() - start_time)
         return Box(ray.put(data))
 
     async def generate_rollout_async(self, rollout_id: int):
@@ -151,10 +176,12 @@ class RolloutControllerBase:
             print(
                 f"{self.tag}: Warning! Sample Num less than batch size. Got {len(results)} samples, expected {self.rollout_batch_size}"
             )
-        results = sorted(results, key=lambda group: group[0]["index"])
+        results = sorted(
+            results, key=lambda group: group[0][0]["index"] if isinstance(group[0], list) else group[0]["index"]
+        )
 
         # flatten the data if it is a list of lists
-        if isinstance(results[0], list):
+        while isinstance(results[0], list):
             results = sum(results, [])
         return results
 

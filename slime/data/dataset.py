@@ -5,22 +5,21 @@ import torch
 from typing import Union
 from slime.utils.types import Sample
 from transformers import AutoTokenizer
-from datasets import Dataset as hf_ds
+import pandas as pd
 
 __all__ = ["Dataset"]
 
 
 # TODO: don't read the whole file into memory.
 def read_file(path):
-    if path.endswith(".jsonl") or path.endswith(".json"):
-        ds = hf_ds.from_json(path)
+    if path.endswith(".jsonl"):
+        df = pd.read_json(path, lines=True)
     elif path.endswith(".parquet"):
-        ds = hf_ds.from_parquet(path)
+        df = pd.read_parquet(path, dtype_backend="pyarrow")
     else:
         raise ValueError(f"Unsupported file format: {path}. Supported formats are .jsonl and .parquet.")
-
-    for data in ds:
-        yield data
+    for _, row in df.iterrows():
+        yield row.to_dict()
 
 
 def dummy_convert_func(samples: Union[list[Sample], list[list[Sample]]]):

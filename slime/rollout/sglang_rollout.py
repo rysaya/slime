@@ -50,8 +50,10 @@ async def generate_one_sample_vanilla(args, tokenizer, sample: Sample, raw_sampl
 
     if "output_token_logprobs" in output["meta_info"]:
         new_response_tokens = [item[1] for item in output["meta_info"]["output_token_logprobs"]]
+        new_response_log_probs = [item[0] for item in output["meta_info"]["output_token_logprobs"]]
     else:
         new_response_tokens = []
+        new_response_log_probs = []
 
     # Update sample with tokens directly - avoiding re-tokenization
     sample["tokens"] = sample["tokens"] + new_response_tokens
@@ -60,15 +62,10 @@ async def generate_one_sample_vanilla(args, tokenizer, sample: Sample, raw_sampl
     sample["response_length"] += len(new_response_tokens)
     sample["response"] += output["text"]
 
-    # Extract rollout log probabilities for off-policy correction
-    if args.enable_off_policy_correction:
-        new_response_log_probs = [item[0] for item in output["meta_info"]["output_token_logprobs"]]
-        if "rollout_log_probs" not in sample:
-            sample["rollout_log_probs"] = []
-        sample["rollout_log_probs"].extend(new_response_log_probs)
-        assert sample["response_length"] == len(
-            sample["rollout_log_probs"]
-        ), f"response_length: {sample['response_length']} vs {len(sample['rollout_log_probs'])}"
+    if "rollout_log_probs" not in sample:
+        sample["rollout_log_probs"] = []
+        sample["rollout_log_probs"] += new_response_log_probs
+
     match output["meta_info"]["finish_reason"]["type"]:
         case "length":
             sample.set_status(SampleStatus.TRUNCATED)
@@ -126,9 +123,10 @@ async def generate_rollout(args, sample_group, tokenizer, sampling_params) -> li
         for sample, reward in zip(sample_group, rewards):
             sample["reward"] = reward
 
-    if not gen_state.is_aborted() and sample_group[0]["index"] == 1:
+    sample = sample_group[0][0] if isinstance(sample_group[0], list) else sample_group[0]
+    if not gen_state.is_aborted() and sample["index"] == 1:
         print(
-            f"First rollout sample: {[sample_group[0]['prompt'] + sample_group[0]['response']]}, label: {sample_group[0]['label']}, reward: {sample_group[0]['reward']}",
+            f"First rollout sample: {[sample['prompt'] + sample['response']]}, label: {sample['label']}, reward: {sample['reward']}",
             flush=True,
         )
 

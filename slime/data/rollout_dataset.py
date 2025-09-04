@@ -1,5 +1,7 @@
 import copy
 import torch
+import json
+import numpy as np
 from slime.data.dataset import Dataset, read_file
 from slime.utils.types import Sample, SampleStatus
 from slime.data.templates import get_chat_template
@@ -41,7 +43,11 @@ def convert_rl_samples_to_train(args, samples: list[Sample]):
     if args.advantage_estimator in ["grpo", "gspo", "reinforce_plus_plus_baseline"] and args.rewards_normalization:
         # group norm
         rewards = torch.tensor([r for r in rewards], dtype=torch.float)
-        rewards = rewards.reshape(-1, args.n_samples_per_prompt)
+        if rewards.shape[-1] == args.n_samples_per_prompt * args.rollout_batch_size:
+            rewards = rewards.reshape(-1, args.n_samples_per_prompt)
+        else:
+            # when samples count are not equal in each group
+            rewards = rewards.view(-1, rewards.shape[-1])
         mean = rewards.mean(dim=-1, keepdim=True)
         rewards = rewards - mean
 
@@ -85,6 +91,11 @@ class RolloutDataset(Dataset):
                 else:
                     if self.args.tool_key is not None:
                         tools = data[self.args.tool_key]
+                        if isinstance(tools, str):
+                            tools = json.loads(tools)
+                        elif isinstance(tools, np.ndarray):
+                            tools = tools.tolist()
+                        assert isinstance(tools, list), f"tools must be a list, got {type(tools)} instead"
                     else:
                         tools = None
                     prompt = self.tokenizer.apply_chat_template(

@@ -2,6 +2,7 @@ import asyncio
 import logging
 from pathlib import Path
 from copy import deepcopy
+from time import time
 from tqdm import tqdm
 
 import ray
@@ -39,6 +40,7 @@ class RolloutControllerWithBuffer(RolloutControllerBase):
         self.over_sample_batch_size = int((1 + self.args.buffer_size_frac) * self.rollout_batch_size + 0.5)
 
     def generate(self, rollout_id):
+        start_time = time()
         # TODO 先留你不杀
         if self.args.load_debug_rollout_data:
             data = torch.load(
@@ -55,7 +57,7 @@ class RolloutControllerWithBuffer(RolloutControllerBase):
             path.parent.mkdir(parents=True, exist_ok=True)
             torch.save([d.to_dict() for d in data], path)
         data = self.post_process_func(self.args, data)
-        self.log_func(rollout_id, self.args, data)
+        self.log_func(rollout_id, self.args, data, time() - start_time)
         return Box(ray.put(data))
 
     """
@@ -142,13 +144,15 @@ class RolloutControllerWithBuffer(RolloutControllerBase):
             print(
                 f"{self.tag}: Warning! Sample Num not same as batch size. Got {len(results)} samples, expected {self.rollout_batch_size}"
             )
-        results = sorted(results, key=lambda group: group[0]["index"])
+        results = sorted(
+            results, key=lambda group: group[0][0]["index"] if isinstance(group[0], list) else group[0]["index"]
+        )
 
         # TODO: 这里暂时先截断rollout_batch_size数量，megatron那边sample分配debug还没成功，等成功再撤
         results = results[: self.rollout_batch_size]
 
         # flatten the data if it is a list of lists
-        if isinstance(results[0], list):
+        while isinstance(results[0], list):
             results = sum(results, [])
         self.buffer_append(aborted_samples)
         # reset the aborted state to prevent effects on the next rollout or eval.
