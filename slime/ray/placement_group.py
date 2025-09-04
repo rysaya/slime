@@ -4,7 +4,6 @@ from ray.util.placement_group import placement_group
 from ray.util.scheduling_strategies import PlacementGroupSchedulingStrategy
 
 from .actor_group import RayTrainGroup
-from .rollout_manager import RolloutManager
 
 
 @ray.remote(num_gpus=1)
@@ -116,14 +115,3 @@ def create_actor_group(args, pg, wandb_run_id):
         wandb_run_id=wandb_run_id,
     )
     return actor_model
-
-
-def create_rollout_manager(args, pg, actor_model, wandb_run_id):
-    init_gen_engine = (
-        args.train_type == "rl" or (args.eval_files is not None and args.eval_interval > 0)
-    ) and not args.debug_train_only
-
-    rollout_manager = RolloutManager(args, pg, wandb_run_id=wandb_run_id, init_gen_engines=init_gen_engine)
-    if init_gen_engine and not args.debug_rollout_only:
-        ray.get(actor_model.async_init_weight_update_connections(rollout_manager))
-    return rollout_manager

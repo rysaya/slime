@@ -69,16 +69,6 @@ class MegatronTrainRayActor(TrainRayActor):
             self.weights["rollout_actor"] = {}
             self.update_cpu_params_dict(self.weights["rollout_actor"])
 
-        update_weight_cls = UpdateWeightFromTensor if self.args.colocate else UpdateWeightFromDistributed
-        self.weight_updator = update_weight_cls(
-            self.args,
-            self.model,
-            self.weights,
-            model_name=type(self.hf_config).__name__.lower() if self.args.model_name is None else self.args.model_name,
-            quantization_config=getattr(self.hf_config, "quantization_config", None),
-            vocab_size=self.tokenizer.vocab_size if self.args.vocab_size is None else self.args.vocab_size,
-        )
-
         # empty cache after initialization
         clear_memory()
 
@@ -305,6 +295,15 @@ class MegatronTrainRayActor(TrainRayActor):
     def connect_rollout_engines(self, rollout_engines, rollout_engine_lock):
         assert rollout_engines is not None, "The rollout_engines must be initialized before connecting."
         self.rollout_engines = rollout_engines
+        update_weight_cls = UpdateWeightFromTensor if self.args.colocate else UpdateWeightFromDistributed
+        self.weight_updator = update_weight_cls(
+            self.args,
+            self.model,
+            self.weights,
+            model_name=type(self.hf_config).__name__.lower() if self.args.model_name is None else self.args.model_name,
+            quantization_config=getattr(self.hf_config, "quantization_config", None),
+            vocab_size=self.tokenizer.vocab_size if self.args.vocab_size is None else self.args.vocab_size,
+        )
         self.weight_updator.connect_rollout_engines(rollout_engines, rollout_engine_lock)
         dist.barrier(group=get_gloo_group())
 

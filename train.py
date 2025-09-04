@@ -1,6 +1,7 @@
 import ray
 
-from slime.ray.placement_group import create_actor_group, create_placement_groups, create_rollout_manager
+from slime.ray.placement_group import create_actor_group, create_placement_groups
+from slime.ray.rollout_manager import RolloutManager
 from slime.utils.arguments import parse_args
 from slime.utils.wandb_utils import init_wandb_primary
 from sglang.srt.constants import GPU_MEMORY_TYPE_KV_CACHE, GPU_MEMORY_TYPE_WEIGHTS
@@ -12,13 +13,12 @@ def train(args):
     wandb_run_id = init_wandb_primary(args)
 
     actor_model = create_actor_group(args, pgs["actor"], wandb_run_id=wandb_run_id)
-    # sync the initialization (model initalization, load checkpoint, etc.)
-    start_rollout_ids = ray.get(
-        actor_model.async_init(args, role="actor", with_ref=args.kl_coef != 0 or args.use_kl_loss)
-    )
 
     # create the rollout manager, with sglang engines inside.
-    rollout_manager = create_rollout_manager(args, pgs["rollout"], actor_model, wandb_run_id=wandb_run_id)
+    init_gen_engine = (
+        args.train_type == "rl" or (args.eval_files is not None and args.eval_interval > 0)
+    ) and not args.debug_train_only
+    rollout_manager = RolloutManager(args, pgs["rollout"], wandb_run_id=wandb_run_id, init_gen_engines=init_gen_engine)
 
     # calculate num_rollout from num_epoch
     num_rollout_per_epoch = None
@@ -26,10 +26,18 @@ def train(args):
         num_rollout_per_epoch = ray.get(rollout_manager.train_data_loader.get_num_rollout_per_epoch.remote())
         args.num_rollout = num_rollout_per_epoch * args.num_epoch
     assert args.num_rollout > 0
+    print(f"num_rollout_per_epoch: {num_rollout_per_epoch}, Total num_rollout: {args.num_rollout}")
 
+    # sync the initialization (model initalization, load checkpoint, etc.)
+    start_rollout_ids = ray.get(
+        actor_model.async_init(args, role="actor", with_ref=args.kl_coef != 0 or args.use_kl_loss)
+    )
     assert len(set(start_rollout_ids)) == 1
     if args.start_rollout_id is None:
         args.start_rollout_id = start_rollout_ids[0]
+
+    if init_gen_engine and not args.debug_rollout_only:
+        ray.get(actor_model.async_init_weight_update_connections(rollout_manager))
 
     if args.load is not None:
         ray.get(rollout_manager.train_data_loader.load.remote(args.start_rollout_id - 1))

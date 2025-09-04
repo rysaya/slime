@@ -109,6 +109,8 @@ def setup_model_and_optimizer(
         # Set bucket_size to infinity if overlap_grad_reduce is False.
         if not ddp_config.overlap_grad_reduce:
             ddp_config.bucket_size = None
+        print(f"model config = {config}, ddp_config = {ddp_config}")
+        print(f"model = {model}")
 
         model = [
             DDP(
@@ -490,18 +492,22 @@ def save(iteration, model, optimizer, opt_param_scheduler):
     )
     if should_disable_forward_pre_hook(args):
         enable_forward_pre_hook(model)
+    print(f"checkpointed  saved at iteration {iteration}", flush=True)
 
 
 def initialize_model_and_optimizer(args):
     model, optimizer, opt_param_scheduler = setup_model_and_optimizer(args)
     clear_memory()
+    print(f"*************** setup_model_and_optimizer done *****************", flush=True)
     iteration, _ = load_checkpoint(
         model,
         optimizer,
         opt_param_scheduler,
         checkpointing_context={},
         skip_load_to_model_and_opt=False,
+        strict=False if args.train_type == "rm" else True,
     )
+    print(f"*************** load_checkpoint done *****************", flush=True)
     clear_memory()
 
     return model, optimizer, opt_param_scheduler, iteration

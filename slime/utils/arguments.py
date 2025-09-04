@@ -844,7 +844,7 @@ def parse_args(add_custom_arguments=None):
         if not args.colocate:
             args.colocate = True
             print("train_type is not rl, use colocate to save GPU memory")
-        if args.train_type == "sft" and not args.turn_off_train_update_weights:
+        if args.train_type in {"sft", "rm"} and not args.turn_off_train_update_weights:
             args.turn_off_train_update_weights = True
             print(
                 "Warning: The train_type is SFT but the the turn_off_train_update_weights is not set"

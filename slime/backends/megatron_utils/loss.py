@@ -437,8 +437,8 @@ def bradly_terry_loss_function(args, batch, logits, sum_of_sample_mean):
     concated_logits = get_logits(logits, args=args, total_lengths=total_lengths, response_lengths=response_lengths)
     losses = []
     for logi, mask in zip(concated_logits, loss_masks):
-        # TODO: [:, 1000] is for debug before model is complete!!!!, need to remove later!!!
-        cho_rej_logits = logi[mask.bool()][:, 1000]
+        # TODO: [:, 0] is for debug before model is complete!!!!, need to remove later!!!
+        cho_rej_logits = logi[mask.bool()][:, 0]
         losses.append(cho_rej_logits)
     losses = torch.stack(losses, dim=0).view(-1, 2)
     loss = -torch.nn.functional.logsigmoid(losses[:, 0] - losses[:, 1]).mean()
@@ -459,8 +459,8 @@ def log_exp_pair_wise_loss(args, batch, logits, sum_of_sample_mean):
     concated_logits = get_logits(logits, args=args, total_lengths=total_lengths, response_lengths=response_lengths)
     losses = []
     for logi, mask in zip(concated_logits, loss_masks):
-        # TODO: [:, 1000] is for debug before model is complete!!!!, need to remove later!!!
-        cho_rej_logits = logi[mask.bool()][:, 1000]
+        # TODO: [:, 0] is for debug before model is complete!!!!, need to remove later!!!
+        cho_rej_logits = logi[mask.bool()][:, 0]
         losses.append(cho_rej_logits)
     losses = torch.stack(losses, dim=0).view(-1, 2)
     loss = torch.log(1 + torch.exp(losses[:, 1] - losses[:, 0])).mean()

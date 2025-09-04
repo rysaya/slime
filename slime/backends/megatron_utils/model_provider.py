@@ -1,6 +1,7 @@
 # Adapt from https://github.com/NVIDIA/Megatron-LM/blob/b1efb3c7126ef7615e8c333432d76e08038e17ff/pretrain_gpt.py
 import inspect
 import torch
+from torch import Tensor
 from contextlib import nullcontext
 from typing import Optional
 
@@ -10,8 +11,10 @@ from megatron.core.models.gpt.gpt_layer_specs import (
     get_gpt_layer_local_spec,
     get_gpt_layer_with_transformer_engine_spec,
 )
+from megatron.core.tensor_parallel.layers import RowParallelLinear
 from megatron.core.transformer.spec_utils import import_module
 from megatron.training.arguments import core_transformer_config_from_args
+from unittest.mock import patch
 
 
 def get_model_provider_func(args):
@@ -125,7 +128,7 @@ def get_model_provider_func(args):
         if vp_stage is not None:
             kwargs["vp_stage"] = vp_stage
 
-        if getattr(args, "mtp_num_layers", None):
+        if getattr(args, "mtp_num_layers", None) and args.train_type != "rm":
             from megatron.core.models.gpt.gpt_layer_specs import get_gpt_mtp_block_spec
 
             mtp_kwargs = {
@@ -139,7 +142,60 @@ def get_model_provider_func(args):
 
         with build_model_context(**build_model_context_args):
             model = GPTModel(**kwargs)
+            # if args.train_type == 'rm':
+            #    model = transform_model_to_rm_model(model)
 
         return model
 
     return model_provider
+
+
+def transform_model_to_rm_model(model):
+    """
+    Inspired from Nemo Aligner: nemo_aligner/models/nlp/gpt/gpt_reward_model.py
+    Only do simplest liner head forward, do not include reward exaction, loss calculation and etc
+    here we assume the model output liner is hidden_size -> 1
+    """
+    if model.post_process:
+        model.rm_head = RowParallelLinear(
+            # model.output_layer = RowParallelLinear(
+            model.config.hidden_size,
+            1,
+            config=model.config,
+            init_method=model.config.init_method,
+            bias=True,
+            input_is_parallel=model.parallel_output,
+            stride=1,
+            keep_master_weight_for_test=False,
+            skip_bias_add=False,
+        )
+
+        original_forward = model.forward
+
+        def custom_fwd(
+            self,
+            input_ids: Tensor,
+            lengths: Tensor,
+            position_ids: Tensor,
+            attention_mask: Tensor,
+            decoder_input: Tensor = None,
+            labels: Tensor = None,
+            inference_params=None,
+        ):
+            with patch.object(self, "post_process", False):
+                hidden_states = original_forward(
+                    input_ids=input_ids,
+                    position_ids=position_ids,
+                    attention_mask=attention_mask,
+                    decoder_input=decoder_input,
+                    labels=labels,
+                    inference_params=inference_params,
+                )
+
+            if self.post_process:
+                return self.rm_head(hidden_states, lengths)
+            return hidden_states
+
+        model.forward = custom_fwd.__get__(model)
+
+    return model
