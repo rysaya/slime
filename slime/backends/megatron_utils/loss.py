@@ -434,7 +434,11 @@ def log_exp_pair_wise_loss(args, batch, logits, sum_of_sample_mean):
         cho_rej_logits = logi[mask.bool()][:, 0]
         losses.append(cho_rej_logits)
     losses = torch.stack(losses, dim=0).view(-1, 2)
-    loss = torch.log(1 + torch.exp(losses[:, 1] - losses[:, 0])).mean()
+    loss = (
+        torch.log(1 + torch.exp(losses[:, 1] - losses[:, 0])).mean()
+        + 0.1 * torch.log(1 + torch.exp(losses[:, 1])).mean()
+        + 0.1 * torch.log(1 + torch.exp(-losses[:, 0])).mean()
+    )
 
     return (
         loss,
@@ -471,7 +475,7 @@ def loss_function(args, batch, num_microbatches, logits):
         elif args.train_type == "sft":
             loss, log = sft_loss_function(**loss_function_kwargs)
         elif args.train_type == "rm":
-            loss, log = bradly_terry_loss_function(**loss_function_kwargs)
+            loss, log = log_exp_pair_wise_loss(**loss_function_kwargs)
         else:
             raise ValueError(f"Unknown train type: {args.train_type}")
 
