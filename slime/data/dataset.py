@@ -1,6 +1,9 @@
 import random
 import os
 import torch
+import multiprocessing
+import json
+import gzip
 
 from typing import Union
 from slime.utils.types import Sample
@@ -11,15 +14,32 @@ __all__ = ["Dataset"]
 
 
 # TODO: don't read the whole file into memory.
-def read_file(path):
-    if path.endswith(".jsonl"):
-        df = pd.read_json(path, lines=True)
-    elif path.endswith(".parquet"):
-        df = pd.read_parquet(path, dtype_backend="pyarrow")
+def read_file(file_name):
+    file_suffix = file_name.rsplit(".", 1)[-1]
+    datas = None
+    if file_suffix == "json":
+        with open(file_name, "r", encoding="utf-8") as f:
+            return json.load(f)
+    elif file_suffix == "jsonl":
+        with open(file_name, "r", encoding="utf-8") as f:
+            return [json.loads(line) for line in f]
+    elif file_suffix == "gz" and file_name.endswith("jsonl.gz"):
+        with gzip.open(file_name, "rt", encoding="utf-8") as f:
+            return [json.loads(line) for line in f]
+    elif file_suffix == "gz" and file_name.endswith("json.gz"):
+        with gzip.open(file_name, "rt", encoding="utf-8") as f:
+            return json.load(f)
+    elif file_suffix in ["csv", "tsv"]:
+        sep = "," if file_suffix == "csv" else "\t"
+        datas = pd.read_csv(file_name, sep=sep)
+    elif file_suffix in ["xlsx", "xls"]:
+        datas = pd.read_excel(file_name)
+    elif file_suffix == "parquet":
+        datas = pd.read_parquet(file_name, dtype_backend="pyarrow")
     else:
-        raise ValueError(f"Unsupported file format: {path}. Supported formats are .jsonl and .parquet.")
-    for _, row in df.iterrows():
-        yield row.to_dict()
+        raise ValueError(f"Unsupported file format: {file_name}.")
+    data_dict = datas.to_dict(orient="records")
+    return data_dict
 
 
 def dummy_convert_func(samples: Union[list[Sample], list[list[Sample]]]):
@@ -41,8 +61,37 @@ class Dataset:
         self.samples = None
         self.n_samples_per_prompt = 1
 
-    def init_dataset(self):
+    def process_datas(self):
         raise NotImplementedError("This method should be implemented in subclasses.")
+
+    def chunk_data(self, data, chunk_size):
+        """将数据按chunk_size分块"""
+        n_chunks = (len(data) + chunk_size - 1) // chunk_size
+        chunks = []
+
+        for i in range(n_chunks):
+            start = i * chunk_size
+            if i == n_chunks - 1:
+                end = len(data)
+            else:
+                end = (i + 1) * chunk_size
+            chunks.append(data[start:end])
+
+        return chunks
+
+    def init_dataset(self):
+        all_datas = []
+        for name, data_path in self.data_path_info.items():
+            for data in read_file(data_path):
+                data["data_path_info"] = name
+                all_datas.append(data)
+        all_datas = self.chunk_data(all_datas, 128)
+        with multiprocessing.Pool(processes=max(1, multiprocessing.cpu_count() - 8)) as pool:
+            self.origin_samples = pool.map(self.process_datas, all_datas)
+        self.origin_samples = [s for sublist in self.origin_samples for s in sublist]
+        self.samples = self.origin_samples
+        if self.args.shuffle_dataset:
+            self.shuffle(self.epoch_id)
 
     def get_sample(self):
         if self.sample_offset >= len(self.samples):

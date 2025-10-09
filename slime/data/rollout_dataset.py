@@ -2,7 +2,7 @@ import copy
 import torch
 import json
 import numpy as np
-from slime.data.dataset import Dataset, read_file
+from slime.data.dataset import Dataset
 from slime.utils.types import Sample, SampleStatus
 from slime.data.templates import get_chat_template
 
@@ -79,48 +79,44 @@ class RolloutDataset(Dataset):
         self.n_samples_per_prompt = self.args.n_samples_per_prompt
         self.init_dataset()
 
-    def init_dataset(self):
-        self.origin_samples = []
-        for name, data_path in self.data_path_info.items():
-            for data in read_file(data_path):
-                # TODO: this is slow. refactor to multiprocess
-                prompt = data[self.args.input_key]
-                if self.args.chat_template:
-                    chat_template = get_chat_template(self.args.chat_template)
-                    prompt = chat_template(prompt, self.tokenizer)
+    def process_datas(self, datas):
+        all_prompts = []
+        for data in datas:
+            prompt = data[self.args.input_key]
+            if self.args.chat_template:
+                chat_template = get_chat_template(self.args.chat_template)
+                prompt = chat_template(prompt, self.tokenizer)
+            else:
+                if self.args.tool_key is not None:
+                    tools = data[self.args.tool_key]
+                    if isinstance(tools, str):
+                        tools = json.loads(tools)
+                    elif isinstance(tools, np.ndarray):
+                        tools = tools.tolist()
+                    assert isinstance(tools, list), f"tools must be a list, got {type(tools)} instead"
                 else:
-                    if self.args.tool_key is not None:
-                        tools = data[self.args.tool_key]
-                        if isinstance(tools, str):
-                            tools = json.loads(tools)
-                        elif isinstance(tools, np.ndarray):
-                            tools = tools.tolist()
-                        assert isinstance(tools, list), f"tools must be a list, got {type(tools)} instead"
-                    else:
-                        tools = None
-                    prompt = self.tokenizer.apply_chat_template(
-                        prompt, tools, tokenize=False, add_generation_prompt=True
-                    )
-
-                prompt_ids = self.tokenizer(prompt, add_special_tokens=False)["input_ids"]
-                if self.args.rollout_max_prompt_len is not None:
-                    if len(prompt_ids) > self.args.rollout_max_prompt_len:
-                        continue
-
-                self.origin_samples.append(
-                    Sample(
-                        prompt=prompt,
-                        response="",
-                        prompt_ids=prompt_ids,
-                        data_source=data.get(self.args.datasource_key, name),
-                        label=data[self.args.label_key] if self.args.label_key is not None else None,
-                        status=SampleStatus.PENDING,
-                        metadata=data.get(self.args.metadata_key) or {},
-                    )
+                    tools = None
+                prompt = self.tokenizer.apply_chat_template(prompt, tools, tokenize=False, add_generation_prompt=True)
+                all_prompts.append(prompt)
+        all_prompt_ids = self.tokenizer(all_prompts, add_special_tokens=False)["input_ids"]
+        processed_samples = []
+        for prompt, prompt_id, data in zip(all_prompts, all_prompt_ids, datas):
+            if self.args.rollout_max_prompt_len is not None:
+                if len(prompt_id) > self.args.rollout_max_prompt_len:
+                    continue
+            processed_samples.append(
+                Sample(
+                    prompt=prompt,
+                    response="",
+                    prompt_ids=prompt_id,
+                    data_source=data.get(self.args.datasource_key, data["data_path_info"]),
+                    label=data[self.args.label_key] if self.args.label_key is not None else None,
+                    status=SampleStatus.PENDING,
+                    metadata=data.get(self.args.metadata_key) or {},
                 )
-        self.samples = self.origin_samples
-        if self.args.shuffle_dataset:
-            self.shuffle(self.epoch_id)
+            )
+
+        return processed_samples
 
     def get_sample(self):
         if self.sample_offset >= len(self.samples):
