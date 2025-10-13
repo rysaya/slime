@@ -15,6 +15,7 @@ def convert_rl_samples_to_train(args, samples: list[Sample]):
         "tokens": [sample["tokens"] for sample in samples],
         "response_lengths": [sample["response_length"] for sample in samples],
         "rewards": [sample["reward"] for sample in samples],
+        "raw_reward": [sample["reward"] for sample in samples],
         "truncated": [1 if sample["status"] == SampleStatus.TRUNCATED else 0 for sample in samples],
     }
 
@@ -39,6 +40,10 @@ def convert_rl_samples_to_train(args, samples: list[Sample]):
     # For rollout buffer
     if samples[0].get_metadata("round_number"):
         train_data["round_number"] = [sample.get_metadata("round_number") for sample in samples]
+
+    for k in samples[0].keys():
+        if "reward" in k and k != "reward":
+            train_data[k] = [sample[k] for sample in samples]
 
     if args.advantage_estimator in ["grpo", "gspo", "reinforce_plus_plus_baseline"] and args.rewards_normalization:
         # group norm
@@ -65,10 +70,14 @@ def convert_eval_samples_to_metrix(args, samples: list[Sample]):
     eval_metrics = {}
 
     for s in samples:
+        rwd_keys = [k for k in s.keys() if "reward" in k]
         if s["data_source"] not in eval_metrics:
-            eval_metrics[s["data_source"]] = {"rewards": [], "truncated": []}
-        eval_metrics[s["data_source"]]["rewards"].append(s["reward"])
+            eval_metrics[s["data_source"]] = {"truncated": []}
         eval_metrics[s["data_source"]]["truncated"].append(s["status"] == SampleStatus.TRUNCATED)
+        for k in rwd_keys:
+            if k not in eval_metrics[s["data_source"]]:
+                eval_metrics[s["data_source"]][k] = []
+            eval_metrics[s["data_source"]][k].append(s[k])
 
     return eval_metrics
 

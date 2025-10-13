@@ -60,6 +60,10 @@ class MultiTurnLossMaskGenerator:
             all_loss_masks.extend(loss_mask)
             all_token_ids.extend(message_ids)
 
+        if all_token_ids[-1] != self.tokenizer.eos_token_id:
+            all_token_ids.append(self.tokenizer.eos_token_id)
+            all_loss_masks.append(1)
+
         return all_token_ids, all_loss_masks
 
     def gen_multi_turn_loss_mask_distill_qwen(self, messages: List[Dict]) -> Tuple[List[int], List[int]]:

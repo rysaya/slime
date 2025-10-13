@@ -7,6 +7,7 @@ from slime.utils.misc import load_function
 from slime.utils.types import Sample
 
 from .deepscaler import get_deepscaler_rule_based_reward
+from .gen_rm_reward import gen_rm_reward
 from .f1 import f1_score
 from .math_dapo_utils import compute_score as compute_score_dapo
 from .math_utils import extract_answer as extract_boxed_answer
@@ -48,6 +49,11 @@ async def async_rm(args, sample: Sample, **kwargs):
         return compute_score_dapo(response, label)
     elif rm_type == "math":
         return 1 if grade_answer_verl(response, label) else 0
+    elif rm_type == "grm":
+        reward, abs_reward, pref_reward = gen_rm_reward(response, label)
+        sample["abs_reward"] = abs_reward
+        sample["pref_reward"] = pref_reward
+        return reward
     elif rm_type == "f1":
         return f1_score(response, label)[0]
     else:

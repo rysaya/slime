@@ -49,11 +49,10 @@ def log_rollout_data(rollout_id, args, samples, rollout_time):
 def log_eval_data(rollout_id, args, samples, rollout_time):
     log_dict = {"eval/rollout_time": rollout_time}
     for key in samples.keys():
-        rewards = samples[key]["rewards"]
-        log_dict[f"eval/{key}"] = sum(rewards) / len(rewards)
-        if "truncated" in samples[key]:
-            truncated = samples[key]["truncated"]
-            log_dict[f"eval/{key}-truncated_ratio"] = sum(truncated) / len(truncated)
+        for k in samples[key]:
+            val = samples[key][k]
+            if isinstance(val, list) and len(val) > 0 and isinstance(val[0], (int, float)):
+                log_dict[f"eval/{key}-{k}"] = sum(val) / len(val)
 
     print(f"eval {rollout_id}: {log_dict}")
     if args.use_wandb:

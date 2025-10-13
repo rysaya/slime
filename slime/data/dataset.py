@@ -1,6 +1,7 @@
 import random
 import os
 import torch
+from tqdm.contrib.concurrent import process_map
 import multiprocessing
 import json
 import gzip
@@ -61,7 +62,7 @@ class Dataset:
         self.samples = None
         self.n_samples_per_prompt = 1
 
-    def process_datas(self):
+    def process_datas(self, datas):
         raise NotImplementedError("This method should be implemented in subclasses.")
 
     def chunk_data(self, data, chunk_size):
@@ -86,8 +87,10 @@ class Dataset:
                 data["data_path_info"] = name
                 all_datas.append(data)
         all_datas = self.chunk_data(all_datas, 128)
-        with multiprocessing.Pool(processes=max(1, multiprocessing.cpu_count() - 8)) as pool:
-            self.origin_samples = pool.map(self.process_datas, all_datas)
+        # use chunksize=1 but chunk datas by hand previously for batch tokenizer
+        self.origin_samples = process_map(
+            self.process_datas, all_datas, max_workers=multiprocessing.cpu_count() - 8, chunksize=1
+        )
         self.origin_samples = [s for sublist in self.origin_samples for s in sublist]
         self.samples = self.origin_samples
         if self.args.shuffle_dataset:
