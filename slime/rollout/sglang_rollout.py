@@ -1,9 +1,9 @@
 import asyncio
-from copy import deepcopy
 import base64
 import copy
 import io
 from argparse import Namespace
+from copy import deepcopy
 from typing import Any, Callable, Union
 
 from PIL import Image
@@ -12,17 +12,13 @@ from transformers import AutoTokenizer
 
 from slime.rollout.base_types import RolloutFnEvalOutput, RolloutFnTrainOutput
 from slime.rollout.filter_hub.base_types import DynamicFilterOutput
-from slime.utils.async_utils import run
 from slime.utils.data import Dataset
 from slime.utils.http_utils import get, post
 from slime.utils.mask_utils import get_response_lengths
-from slime.utils.types import Sample
-
-from slime.utils.http_utils import post
 from slime.utils.misc import load_function
-from slime.utils.types import Sample, SampleStatus
+from slime.utils.types import GenerateState, Sample, SampleStatus
+
 from .rm_hub import async_rm, batched_async_rm
-from slime.utils.types import GenerateState
 
 __all__ = ["create_rollout_fn"]
 
@@ -66,7 +62,6 @@ async def generate_one_sample_vanilla(args, tokenizer, sample: Sample, raw_sampl
                     print(f"Error processing image {part['path']}: {e}")
                     sample["status"] = SampleStatus.ABORTED
                     return sample
-
 
     if len(sample["response"]) > 0:
         sampling_params["max_new_tokens"] -= len(sample.get("tokens", [])) - len(sample["prompt_ids"])
@@ -180,7 +175,7 @@ async def generate_rollout(args, sample_group, tokenizer, sampling_params) -> li
 
     tasks = []
     for idx, sample in enumerate(sample_group):
-        current_sampling_params = sampling_params.copy()       
+        current_sampling_params = sampling_params.copy()
         if getattr(args, "sglang_enable_deterministic_inference", False):
             sampling_seed_base = args.rollout_seed
             seed = sampling_seed_base + idx

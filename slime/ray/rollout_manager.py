@@ -11,13 +11,16 @@ import wandb
 from ray.util.scheduling_strategies import PlacementGroupSchedulingStrategy
 
 from slime.backends.sglang_utils.sglang_engine import SGLangEngine
+
 <<<<<<< HEAD:slime/ray/rollout_manager.py
-from slime.ray.controller import RolloutControllerWithBuffer, RolloutController
-from slime.ray.controller import log_eval_data
-from slime.utils.http_utils import find_available_port, get_host_info, run_router
-from slime.data import EvalDataset, convert_eval_samples_to_metrix
-from .utils import Lock, NOSET_VISIBLE_DEVICES_ENV_VARS_LIST
 from typing import List
+
+from slime.data import EvalDataset, convert_eval_samples_to_metrix
+from slime.ray.controller import RolloutController, RolloutControllerWithBuffer, log_eval_data
+from slime.utils.http_utils import find_available_port, get_host_info, run_router
+
+from .utils import NOSET_VISIBLE_DEVICES_ENV_VARS_LIST, Lock
+
 =======
 from slime.ray.rollout_data_source import RolloutDataSourceWithBuffer
 from slime.rollout.base_types import call_rollout_fn
