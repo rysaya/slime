@@ -4,7 +4,6 @@ from itertools import combinations
 import math
 import re, json
 from typing import List, Dict, Union
-from decimal import Decimal, ROUND_HALF_UP
 
 
 def extract_score_list(response_text: str) -> List[Dict[str, Union[int, float]]]:
@@ -125,18 +124,47 @@ def _kendall_tau_b(y_true, y_pred, undefined="neutral"):
     total_pairs = n * (n - 1) // 2
     gt_all_tie = len(set(y_true)) == 1
     pred_all_tie = len(set(y_pred)) == 1
-    # ---- 你要求的特殊处理 ----
-    if gt_all_tie and pred_all_tie:
-        return 1.0
     if gt_all_tie:
         # 预测并列对算正确，其余算错误
         return _tie_pairs(y_pred) / total_pairs
-    if pred_all_tie and not gt_all_tie:
+    if pred_all_tie:
         # 预测全并列但真值有顺序：只把真值中的并列对算正确
         return _tie_pairs(y_true) / total_pairs
     # ---- 正常 tau-b ----
     C, D, Tx, Ty = _kendall_counts(y_true, y_pred)
     denom = math.sqrt((C + D + Tx) * (C + D + Ty))
+    if denom == 0:
+        # 极端：没有任一对能在两边同时比较出高低（很少见）
+        if undefined == "neutral":
+            return 0.0
+        elif undefined == "nan":
+            return float("nan")
+        elif undefined == "error":
+            raise ValueError("Kendall tau-b undefined: denominator=0.")
+        else:
+            return 0.0
+    return (C - D) / denom
+
+
+def _goodman_kruskal_gamma(y_true, y_pred, undefined="neutral"):
+    """相当于忽视结影响的_kendall_tau_b"""
+    if len(y_true) != len(y_pred):
+        raise ValueError("y_true and y_pred must have the same length")
+    n = len(y_true)
+    if n < 2:
+        return 0.0  # 没有可比较对，返回中性
+    total_pairs = n * (n - 1) // 2
+    gt_all_tie = len(set(y_true)) == 1
+    pred_all_tie = len(set(y_pred)) == 1
+    if gt_all_tie:
+        # 预测并列对算正确，其余算错误
+        return _tie_pairs(y_pred) / total_pairs
+    if pred_all_tie:
+        # 预测全并列但真值有顺序：只把真值中的并列对算正确
+        return _tie_pairs(y_true) / total_pairs
+    # ---- 正常 tau-b ----
+    C, D, _, _ = _kendall_counts(y_true, y_pred)
+    denom = C + D
     if denom == 0:
         # 极端：没有任一对能在两边同时比较出高低（很少见）
         if undefined == "neutral":
@@ -215,6 +243,8 @@ def comput_preference_score(ground_truth_list, pred_list, metric="tau_b"):
         raise ValueError(f"未知 metric: {metric}")
     if key == "tau_b":
         return _kendall_tau_b(y_true, y_pred)
+    elif key == "gamma":
+        return _goodman_kruskal_gamma(y_true, y_pred)
     else:
         raise RuntimeError("未实现的 metric")
 
@@ -227,24 +257,38 @@ def gen_rm_reward(response: str, label: List[Dict[str, Union[int, float]]]) -> f
     依赖: extract_score_list, comput_abs_score, comput_preference_score
     """
 
-    def r1(x: Union[int, float, str]) -> float:
-        # 四舍五入到 1 位小数（ROUND_HALF_UP）
-        return float(Decimal(str(x)).quantize(Decimal("0.0"), rounding=ROUND_HALF_UP))
+    def round_num(x, digits=1, adjust_factor=1.0):
+        """四舍五入，默认保留1位小数。adjust_factor用来更精细的倍数（比如是2的话就是四舍五入到x.5）"""
+        if isinstance(x, str):
+            x = float(x)
+        if not isinstance(x, (int, float)):
+            raise ValueError(f"无法对非数字类型 {type(x)} 进行四舍五入")
+        if math.isnan(x) or math.isinf(x):
+            raise ValueError(f"无法对{x}进行四舍五入")
+        factor = 10**digits
+        return int(x * factor * adjust_factor + 0.5) / factor / adjust_factor
 
     pred_list = extract_score_list(response)
     if len(pred_list) != len(label):
         return -10.0, -10.0, -10.0
-    merge_pred_score = [r1(0.7 * p["helpfulness"] + 0.3 * p["format"]) for p in pred_list]
-    merge_label_score = [r1(d["score"]) for d in label]
-    abs_score = comput_abs_score(merge_pred_score, merge_label_score, mode="mean_score")
-    perf_score = comput_preference_score(merge_pred_score, merge_label_score, metric="tau_b")
-    final_score = r1(0.3 * abs_score + 0.7 * perf_score)
-    return final_score, abs_score, perf_score
+    try:
+        merge_pred_score = [round_num(0.7 * p["helpfulness"] + 0.3 * p["format"]) for p in pred_list]
+        merge_label_score = [round_num(d["score"]) for d in label]
+        merged_pred_pref_score = [round_num(s, digits=0, adjust_factor=2) for s in merge_pred_score]
+        merged_label_pref_score = [round_num(s, digits=0, adjust_factor=2) for s in merge_label_score]
+        abs_score = comput_abs_score(merge_pred_score, merge_label_score, mode="mean_score", margin=0.5)
+        perf_score = comput_preference_score(merged_pred_pref_score, merged_label_pref_score, metric="gamma")
+        final_score = round_num(0.6 * abs_score + 0.4 * perf_score, digits=2) if len(pred_list) >= 2 else abs_score
+        return final_score, abs_score, perf_score
+    except Exception as e:
+        print(f"Error when getting reward scores: {e}")
+        return -10.0, -10.0, -10.0
 
 
 if __name__ == "__main__":
-    gt = [1, 2, 3, 4]
-    pred = [1, 2, 3, 1]
+    gt = [10, 8]
+    pred = [10, 10]
     print(comput_abs_score(gt, pred, margin=1))  # 默认 mean_score
     print(comput_abs_score(gt, pred, margin=1, mode="acc_within_margin"))  # 命中率
     print(comput_preference_score(gt, pred, metric="tau_b"))
+    print(comput_preference_score(gt, pred, metric="gamma"))
