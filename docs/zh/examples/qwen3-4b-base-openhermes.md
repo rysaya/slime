@@ -1,6 +1,4 @@
-# Qwen3-4B-Base + OpenHermes-2.5
-
-[English](../en/sft.md)
+# SFT Qwen3-4B-Base
 
 ## 环境准备
 

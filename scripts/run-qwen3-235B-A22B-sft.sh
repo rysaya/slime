@@ -26,7 +26,7 @@ fi
 # will prevent ray from buffering stdout/stderr
 export PYTHONBUFFERED=16
 
-NVLINK_COUNT=$(nvidia-smi | grep -o "NVLink" | wc -l)
+NVLINK_COUNT=$(nvidia-smi topo -m 2>/dev/null | grep -o 'NV[0-9][0-9]*' | wc -l)
 if [ "$NVLINK_COUNT" -gt 0 ]; then
     HAS_NVLINK=1
 else
@@ -144,7 +144,6 @@ ray job submit --address="http://127.0.0.1:8265" \
    ${CKPT_ARGS[@]} \
    ${SFT_ARGS[@]} \
    ${OPTIMIZER_ARGS[@]} \
-   ${DISTRIBUTED_ARGS[@]} \
    ${WANDB_ARGS[@]} \
    ${PERF_ARGS[@]} \
    ${EVAL_ARGS[@]} \

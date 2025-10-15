@@ -5,7 +5,7 @@
 
 ## Introduction
 
-If you are running Slime on AMD's Instinct, please refer to the following materials. This tutorial will explain how to set up the development environment (Docker), use the modified ROCm dependencies, and provide an example for running the experiments. The current rocm docker only support AMD's MI300 and MI325 GPUs.
+If you are running slime on AMD's Instinct, please refer to the following materials. This tutorial will explain how to set up the development environment (Docker), use the modified ROCm dependencies, and provide an example for running the experiments. The current rocm docker only support AMD's MI300 and MI325 GPUs.
 
 
 <!-- First, you need to configure the slime runtime environment according to the [Readme](../../README.md) documentation and cd to the slime project directory. -->
@@ -14,12 +14,12 @@ If you are running Slime on AMD's Instinct, please refer to the following materi
 
 You can download the prebuilt image from DockerHub: [rlsys/slime](https://hub.docker.com/r/rlsys/slime/tags). 
 ```bash
-docker pull rlsys/slime:slime_ubuntu22.04_rocm6.3.4-patch-numa-patch_sglang0.4.9_megatron-patch_ray2.47.1_apex_torch-memory-saver0.0.8-patch-vim
+docker pull rlsys/slime:latest
 ```
 Or you can use the [Dockerfile.rocm](https://github.com/THUDM/slime/blob/main/docker/Dockerfile.rocm) to build it on your side.
 ```bash
 cd docker
-docker build -f Dockerfile.rocm -t slime_ubuntu22.04_rocm6.3.4-patch-numa-patch_sglang0.4.9_megatron-patch_ray2.47.1_apex_torch-memory-saver0.0.8-patch-vim .
+docker build -f Dockerfile.rocm -t rlsys/slime:latest .
 ```
 
 Acknowledgement: Thanks to [Yang Wang](https://www.microsoft.com/en-us/research/people/yangwang5/) for working on the patch for this [ROCm base Docker image](https://hub.docker.com/r/rlsys/rocm-6.3.4-patch/tags) to support virtual memory management on MI300X.
@@ -29,7 +29,7 @@ Acknowledgement: Thanks to [Yang Wang](https://www.microsoft.com/en-us/research/
 
 ### Environment Setup
 
-Based on the [rlsys/slime](https://hub.docker.com/r/rlsys/slime/tags) image (pre-installed with SGLang 0.4.9 and Megatron-LM):
+Based on the [rlsys/slime](https://hub.docker.com/r/rlsys/slime/tags) image (pre-installed with SGLang and Megatron-LM):
 ```bash
 docker run --rm -it \
   --device /dev/dri \
@@ -46,7 +46,7 @@ docker run --rm -it \
   --ulimit memlock=-1 \
   --ulimit stack=67108864 \
   -w $PWD \
-  rlsys/slime:slime_ubuntu22.04_rocm6.3.4-patch-numa-patch_sglang0.4.9_megatron-patch_ray2.47.1_apex_torch-memory-saver0.0.8-patch-vim \
+  rlsys/slime:latest \
   /bin/bash
 ```
 
@@ -123,24 +123,6 @@ export DATA_DIR=$DATA_DIR
 export RAY_EXPERIMENTAL_NOSET_HIP_VISIBLE_DEVICES=${RAY_EXPERIMENTAL_NOSET_HIP_VISIBLE_DEVICES:-"1"} # Must set to 1
 export HIP_VISIBLE_DEVICES=${HIP_VISIBLE_DEVICES:-"0,1,2,3,4,5,6,7"} #You can choose which gpus to use
 ####################
-
-# ### ROCm Support ### (If you do not istall, please install them)
-# # # Clone and install Megatron-LMi-amd_version
-# export MAX_JOBS=512
-# cd $SLIME_DIR
-# pip uninstall megatron-core -y
-# if [ ! -d "Megatron-LM-amd_version" ]; then
-#     git clone git@github.com:yushengsu-thu/Megatron-LM-amd_version.git
-# else
-#     echo "Megatron-LM-amd_version directory already exists, skipping clone"
-# fi
-# cd Megatron-LM-amd_version
-# pip install -vvv -e . 
-# cd $SLIME_DIR
-
-# # Install slime
-# pip install -e .
-# ####################
 
 # will prevent ray from buffering stdout/stderr
 export PYTHONBUFFERED=16
@@ -266,7 +248,7 @@ ray start --head --node-ip-address ${MASTER_ADDR} --num-gpus ${NUM_GPUS} --disab
 ray job submit --address="http://127.0.0.1:8265" \
    --runtime-env-json='{
      "env_vars": {
-        "PYTHONPATH": "'${SLIME_DIR}'/Megatron-LM-amd_version/",
+        "PYTHONPATH": "'${SLIME_DIR}'/Megatron-LM/",
         "CUDA_DEVICE_MAX_CONNECTIONS": "1"
      }
    }' \
@@ -279,7 +261,6 @@ ray job submit --address="http://127.0.0.1:8265" \
    ${ROLLOUT_ARGS[@]} \
    ${OPTIMIZER_ARGS[@]} \
    ${GRPO_ARGS[@]} \
-   ${DISTRIBUTED_ARGS[@]} \
    ${WANDB_ARGS[@]} \
    ${PERF_ARGS[@]} \
    ${EVAL_ARGS[@]} \

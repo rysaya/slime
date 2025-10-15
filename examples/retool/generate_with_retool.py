@@ -1,6 +1,6 @@
 # Adapted from https://github.com/volcengine/verl/blob/cb809d66e46dfd3342d008628891a14a054fa424/recipe/retool/retool.py
 import re
-from typing import Dict, List, Any
+from typing import Any, Dict, List
 
 try:
     from jinja2 import Template
@@ -18,7 +18,7 @@ except ImportError:
     raise ImportError("MathDapo is not installed")
 
 # Import tool sandbox functionality
-from tool_sandbox import tool_registry, TOOL_CONFIGS, SEMAPHORE
+from tool_sandbox import SEMAPHORE, TOOL_CONFIGS, tool_registry
 
 # Jinja2 template for tool-enabled conversations
 TOOL_TEMPLATE = """<|im_start|>system
@@ -257,7 +257,7 @@ async def generate(args, sample: Sample, sampling_params) -> Sample:
         except ImportError:
             pass  # wandb not available
 
-        output = await post(url, payload, use_http2=args.use_http2)
+        output = await post(url, payload)
 
         # Handle abort
         if output["meta_info"]["finish_reason"]["type"] == "abort":
@@ -300,7 +300,7 @@ async def generate(args, sample: Sample, sampling_params) -> Sample:
     sample.tokens = prompt_tokens_ids + response_token_ids
     sample.response_length = len(response_token_ids)
     sample.response = response
-    sample.loss_masks = loss_masks
+    sample.loss_mask = loss_masks
 
     # Store payload information for wandb logging
     sample.payload_text = prompt + response

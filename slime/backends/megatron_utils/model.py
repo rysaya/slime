@@ -1,14 +1,15 @@
 import dataclasses
 import gc
 import math
-from contextlib import nullcontext
+import os
 from functools import partial
 
 import torch
+import wandb
 from megatron.core import mpu
-from megatron.core.enums import ModelType
 from megatron.core.distributed import DistributedDataParallel as DDP
 from megatron.core.distributed import DistributedDataParallelConfig, finalize_model_grads
+from megatron.core.enums import ModelType
 from megatron.core.models.gpt import GPTModel
 from megatron.core.optimizer import OptimizerConfig, get_megatron_optimizer
 from megatron.core.optimizer_param_scheduler import OptimizerParamScheduler
@@ -17,16 +18,12 @@ from megatron.core.utils import get_model_config
 from megatron.training.global_vars import get_args
 from megatron.training.training import get_model
 
-import wandb
 from slime.utils.memory_utils import clear_memory
 
 from .checkpoint import load_checkpoint, save_checkpoint
 from .data import get_batch
-from .loss import get_log_probs_and_entropy, loss_function
+from .loss import loss_function
 from .model_provider import get_model_provider_func
-
-if torch.version.hip:
-    from vllm.device_allocator.cumem import CuMemAllocator
 
 
 def get_optimizer_param_scheduler(args, optimizer):
@@ -68,6 +65,7 @@ def get_optimizer_param_scheduler(args, optimizer):
 
 def setup_model_and_optimizer(
     args,
+    role: str = "actor",
     no_wd_decay_cond=None,
     scale_lr_cond=None,
     lr_mult=1.0,
@@ -76,75 +74,66 @@ def setup_model_and_optimizer(
     assert not args.moe_use_upcycling
     assert args.load is not None or args.pretrained_checkpoint is not None
 
-    model = get_model(get_model_provider_func(args), ModelType.encoder_or_decoder, wrap_with_ddp=False)
+    model = get_model(get_model_provider_func(args, role), ModelType.encoder_or_decoder, wrap_with_ddp=False)
 
-    with (
-        CuMemAllocator.get_instance().use_memory_pool(tag="model")
-        if args.colocate and torch.version.hip
-        else nullcontext()
-    ):
-        config = get_model_config(model[0])
+    config = get_model_config(model[0])
 
-        kwargs = {}
-        for f in dataclasses.fields(DistributedDataParallelConfig):
-            if hasattr(args, f.name):
-                kwargs[f.name] = getattr(args, f.name)
-        kwargs["grad_reduce_in_fp32"] = args.accumulate_allreduce_grads_in_fp32
-        kwargs["check_for_nan_in_grad"] = args.check_for_nan_in_loss_and_grad
-        kwargs["check_for_large_grads"] = args.check_for_large_grads
-        kwargs["bucket_size"] = args.ddp_bucket_size
-        kwargs["pad_buckets_for_high_nccl_busbw"] = args.ddp_pad_buckets_for_high_nccl_busbw
-        kwargs["average_in_collective"] = args.ddp_average_in_collective
-        ddp_config = DistributedDataParallelConfig(**kwargs)
+    kwargs = {}
+    for f in dataclasses.fields(DistributedDataParallelConfig):
+        if hasattr(args, f.name):
+            kwargs[f.name] = getattr(args, f.name)
+    kwargs["grad_reduce_in_fp32"] = args.accumulate_allreduce_grads_in_fp32
+    kwargs["check_for_nan_in_grad"] = args.check_for_nan_in_loss_and_grad
+    kwargs["check_for_large_grads"] = args.check_for_large_grads
+    kwargs["bucket_size"] = args.ddp_bucket_size
+    kwargs["pad_buckets_for_high_nccl_busbw"] = args.ddp_pad_buckets_for_high_nccl_busbw
+    kwargs["average_in_collective"] = args.ddp_average_in_collective
+    ddp_config = DistributedDataParallelConfig(**kwargs)
 
-        # In the custom FSDP and DDP use path, we need to initialize the bucket size.
-        # If bucket_size is not provided as an input, use sane default.
-        # If using very large dp_sizes, make buckets larger to ensure that chunks used in NCCL
-        # ring-reduce implementations are large enough to remain bandwidth-bound rather than
-        # latency-bound.
-        if ddp_config.bucket_size is None:
-            ddp_config.bucket_size = max(
-                40000000, 1000000 * mpu.get_data_parallel_world_size(with_context_parallel=True)
-            )
-        # Set bucket_size to infinity if overlap_grad_reduce is False.
-        if not ddp_config.overlap_grad_reduce:
-            ddp_config.bucket_size = None
-        print(f"model config = {config}, ddp_config = {ddp_config}")
-        print(f"model = {model}")
+    # In the custom FSDP and DDP use path, we need to initialize the bucket size.
+    # If bucket_size is not provided as an input, use sane default.
+    # If using very large dp_sizes, make buckets larger to ensure that chunks used in NCCL
+    # ring-reduce implementations are large enough to remain bandwidth-bound rather than
+    # latency-bound.
+    if ddp_config.bucket_size is None:
+        ddp_config.bucket_size = max(40000000, 1000000 * mpu.get_data_parallel_world_size(with_context_parallel=True))
+    # Set bucket_size to infinity if overlap_grad_reduce is False.
+    if not ddp_config.overlap_grad_reduce:
+        ddp_config.bucket_size = None
 
-        model = [
-            DDP(
-                config=config,
-                ddp_config=ddp_config,
-                module=model_chunk,
-                # Turn off bucketing for model_chunk 2 onwards, since communication for these
-                # model chunks is overlapped with compute anyway.
-                disable_bucketing=(model_chunk_idx > 0) or args.overlap_param_gather_with_optimizer_step,
-            )
-            for (model_chunk_idx, model_chunk) in enumerate(model)
-        ]
-
-        # Optimizer
-        kwargs = {}
-        for f in dataclasses.fields(OptimizerConfig):
-            if hasattr(args, f.name):
-                kwargs[f.name] = getattr(args, f.name)
-        config = OptimizerConfig(**kwargs)
-        config.timers = None
-
-        optimizer = get_megatron_optimizer(
-            config,
-            model,
-            no_wd_decay_cond,
-            scale_lr_cond,
-            lr_mult,
-            use_gloo_process_groups=args.enable_gloo_process_groups,
+    model = [
+        DDP(
+            config=config,
+            ddp_config=ddp_config,
+            module=model_chunk,
+            # Turn off bucketing for model_chunk 2 onwards, since communication for these
+            # model chunks is overlapped with compute anyway.
+            disable_bucketing=(model_chunk_idx > 0) or args.overlap_param_gather_with_optimizer_step,
         )
-        opt_param_scheduler = get_optimizer_param_scheduler(args, optimizer)
-        for optimizer in optimizer.chained_optimizers:
-            if not getattr(optimizer, "init_state_fn", None):
-                continue
-            optimizer.init_state_fn(optimizer.optimizer, optimizer.config)
+        for (model_chunk_idx, model_chunk) in enumerate(model)
+    ]
+
+    # Optimizer
+    kwargs = {}
+    for f in dataclasses.fields(OptimizerConfig):
+        if hasattr(args, f.name):
+            kwargs[f.name] = getattr(args, f.name)
+    config = OptimizerConfig(**kwargs)
+    config.timers = None
+
+    optimizer = get_megatron_optimizer(
+        config,
+        model,
+        no_wd_decay_cond,
+        scale_lr_cond,
+        lr_mult,
+        use_gloo_process_groups=args.enable_gloo_process_groups,
+    )
+    opt_param_scheduler = get_optimizer_param_scheduler(args, optimizer)
+    for optimizer in optimizer.chained_optimizers:
+        if not getattr(optimizer, "init_state_fn", None):
+            continue
+        optimizer.init_state_fn(optimizer.optimizer, optimizer.config)
 
     return model, optimizer, opt_param_scheduler
 
@@ -162,7 +151,7 @@ def disable_forward_pre_hook(model_chunks, param_sync=True):
 
 
 @torch.no_grad()
-def forward_only(args, model, data_iterator, num_microbatches, store_prefix=""):
+def forward_only(f, args, model, data_iterator, num_microbatches, store_prefix=""):
     """Only do the forward pass and calculate the logprob."""
 
     # reset data iterator
@@ -195,7 +184,7 @@ def forward_only(args, model, data_iterator, num_microbatches, store_prefix=""):
         )
 
         return output_tensor, partial(
-            get_log_probs_and_entropy,
+            f,
             args=args,
             unconcat_tokens=unconcat_tokens,
             total_lengths=total_lengths,
@@ -294,9 +283,14 @@ def train_one_step(args, rollout_id, step_id, data_iterator, model, optimizer, o
                 "values",
                 "advantages",
                 "sub_samples_idx",
+                "returns",
                 "rollout_log_probs",
             ],
         )
+
+        if os.environ.get("ENABLE_ROUTING_REPLAY", "0") == "1":
+            old_stage = os.environ["ROUTING_REPLAY_STAGE"]
+            os.environ["ROUTING_REPLAY_STAGE"] = "replay_forward"
 
         output_tensor = model(
             input_ids=batch["tokens"],
@@ -305,6 +299,9 @@ def train_one_step(args, rollout_id, step_id, data_iterator, model, optimizer, o
             labels=None,
             packed_seq_params=batch["packed_seq_params"],
         )
+
+        if os.environ.get("ENABLE_ROUTING_REPLAY", "0") == "1":
+            os.environ["ROUTING_REPLAY_STAGE"] = old_stage
 
         return output_tensor, partial(loss_function, args, batch, num_microbatches)
 
@@ -458,25 +455,34 @@ def train(rollout_id, model, optimizer, opt_param_scheduler, data_iterator, num_
             and mpu.get_pipeline_model_parallel_rank() == mpu.get_pipeline_model_parallel_world_size() - 1
         ):
             accumulated_step_id = rollout_id * num_steps_per_rollout + step_id
+            role = getattr(model[0], "role", "actor")
+            role_tag = "" if role == "actor" else f"{role}-"
             log_dict = {
-                f"train/{key}": val.mean().item() if isinstance(val, torch.Tensor) else val
+                f"train/{role_tag}{key}": val.mean().item() if isinstance(val, torch.Tensor) else val
                 for key, val in loss_dict.items()
             }
-            log_dict["train/grad_norm"] = grad_norm
+            log_dict[f"train/{role_tag}grad_norm"] = grad_norm
+
             for param_group_id, param_group in enumerate(optimizer.param_groups):
-                log_dict[f"train/lr-pg_{param_group_id}"] = opt_param_scheduler.get_lr(param_group)
+                log_dict[f"train/{role_tag}lr-pg_{param_group_id}"] = opt_param_scheduler.get_lr(param_group)
 
             if args.use_wandb:
                 log_dict["train/step"] = accumulated_step_id
                 wandb.log(log_dict)
 
-            if args.ci_test:
-                if step_id == 0 and "train/ppo_kl" in log_dict and "train/pg_clipfrac" in log_dict:
-                    assert log_dict["train/ppo_kl"] == 0.0 and log_dict["train/pg_clipfrac"] == 0.0
-                if accumulated_step_id == 0 and "train/kl_loss" in log_dict:
-                    assert log_dict["train/kl_loss"] == 0.0
+            if args.use_tensorboard:
+                from slime.utils.tensorboard_utils import _TensorboardAdapter
 
-            print(f"step {accumulated_step_id}: {log_dict}")
+                tb = _TensorboardAdapter(args)
+                tb.log(data=log_dict, step=accumulated_step_id)
+
+            if args.ci_test and not args.ci_disable_kl_checker:
+                if step_id == 0 and "train/ppo_kl" in log_dict and "train/pg_clipfrac" in log_dict:
+                    assert log_dict["train/ppo_kl"] == 0.0 and log_dict["train/pg_clipfrac"] == 0.0, f"{log_dict=}"
+                if accumulated_step_id == 0 and "train/kl_loss" in log_dict:
+                    assert log_dict["train/kl_loss"] == 0.0, f"{log_dict=}"
+
+            print(f"{role_tag}step {accumulated_step_id}: {log_dict}")
     # Close out pre-hooks if using distributed optimizer and overlapped param gather.
     if pre_hook_enabled:
         disable_forward_pre_hook(model)
@@ -501,10 +507,10 @@ def save(iteration, model, optimizer, opt_param_scheduler):
     print(f"checkpointed  saved at iteration {iteration}", flush=True)
 
 
-def initialize_model_and_optimizer(args):
-    model, optimizer, opt_param_scheduler = setup_model_and_optimizer(args)
+def initialize_model_and_optimizer(args, role: str = "actor"):
+    model, optimizer, opt_param_scheduler = setup_model_and_optimizer(args, role)
+    setattr(model[0], "role", role)
     clear_memory()
-    print(f"*************** setup_model_and_optimizer done *****************", flush=True)
     iteration, _ = load_checkpoint(
         model,
         optimizer,
@@ -513,7 +519,6 @@ def initialize_model_and_optimizer(args):
         skip_load_to_model_and_opt=False,
         strict=False if args.train_type == "rm" else True,
     )
-    print(f"*************** load_checkpoint done *****************", flush=True)
     clear_memory()
 
     return model, optimizer, opt_param_scheduler, iteration

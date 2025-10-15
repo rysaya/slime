@@ -1,32 +1,20 @@
-# Speculative Decoding – Usage Guide
+# Speculative Decoding
 
-### Support Status
+Speculative decoding is an important optimization for making faster rollout during RL training. Currently slime only supports speculative decoding without training.
 
-* ✅ **MTP layer for inference only (no training)**
-
-  * ✅ Models with native MTP layers:
-
-    * ✅ Mimo-7B-RL
-    * 🧪 Deepseek-V3/R1
-    * 🧪 GLM-4.5
-  * 🚧 External draft models trained with SpecForge:
-
-    * 🚧 [sglang-EAGLE3-LLaMA3.1-Instruct-8B](https://huggingface.co/lmsys/sglang-EAGLE3-LLaMA3.1-Instruct-8B)
-    * 🚧 [Qwen3-235B-A22B-EAGLE3](https://huggingface.co/lmsys/Qwen3-235B-A22B-EAGLE3)
-* ⏳ **MTP layer training with RL**
-
-  * 🚧 Sequence packing with MTP layers is under development in Megatron.
-
-### Usage
-
-Add the following flags to `SGLANG_ARGS`:
+For model with MTP layer (e.g. GLM-4.6, Deepseek-V3/R1), you can run with:
 
 ```bash
-# for speculative decoding
 --sglang-speculative-algorithm EAGLE
 --sglang-speculative-num-steps 3
 --sglang-speculative-eagle-topk 1
 --sglang-speculative-num-draft-tokens 4
+```
+
+And for external draft model (e.g. draft models from [SpecForge](https://docs.sglang.ai/SpecForge/)), you need also pass:
+
+```bash
+--speculative-draft-model-path /your/draft/model/path
 ```
 
 For details on parameter meanings and configuration, see the [SGLang speculative decoding documentation](https://docs.sglang.ai/advanced_features/speculative_decoding.html).
@@ -42,7 +30,7 @@ For details on parameter meanings and configuration, see the [SGLang speculative
   2. Specify a broader range for `--sglang-cuda-graph-bs` to avoid batch sizes that trigger CUDA graph padding.
   3. Disable CUDA graph (not recommended due to significant performance loss).
   4. **Notice:** Disabling CUDA graph padding with `--sglang-disable-cuda-graph-padding` is currently ineffective for speculative decoding. See [SGLang `cuda_graph_runner.py`](tbd).
-* For debugging, enable Slime’s `--debug-rollout-only` flag to isolate rollout behavior from parameter updates or model offloading.
+* For debugging, enable slime’s `--debug-rollout-only` flag to isolate rollout behavior from parameter updates or model offloading.
 
 ```bash
 # If speculative decoding fails, this can help debug

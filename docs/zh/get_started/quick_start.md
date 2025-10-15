@@ -6,8 +6,21 @@
 
 由于 slime 可能会包含针对 sglang/megatron 的临时补丁（patch）。为避免潜在的环境配置问题，强烈建议**用户使用我们提供的最新 Docker 镜像**，它已预置好所有依赖。
 
-- 对于不方便使用 docker 的场景，请参考 [build_conda.sh](./../../build_conda.sh)；
-- 对于 AMD 支持，请参考 [AMD 使用教程](../en/amd_tutorial.md)。
+### 硬件支持说明
+
+**slime** 支持多种 NVIDIA GPU 硬件平台：
+
+- **B200 系列**：完全支持，运行步骤与 H 系列完全相同
+- **H 系列 (H100/H200)**：官方支持，具有完整的 CI 测试保护，运行稳定可靠
+
+**重要说明**：
+- 最新的 Docker 镜像对 B 卡和 H 卡通用，无需额外配置
+- Megatron 后端在 H 卡上具有 CI 保护，经过充分测试验证，推荐生产环境使用
+- B 卡基本功能稳定，可作为开发和测试参考，但暂无 CI 保护
+- 两种硬件平台使用完全相同的安装和启动流程
+
+- 对于不方便使用 docker 的场景，请参考 [build_conda.sh](https://github.com/THUDM/slime/blob/main/build_conda.sh)；
+- 对于 AMD 支持，请参考 [AMD 使用教程](../../en/platform_support/amd_tutorial.md)。
 
 ### 拉取并启动 Docker 容器
 
@@ -15,12 +28,12 @@
 
 ```shell
 # 拉取最新镜像
-docker pull zhuzilin/slime:latest
+docker pull slimerl/slime:latest
 
 # 启动容器
 docker run --rm --gpus all --ipc=host --shm-size=16g \
   --ulimit memlock=-1 --ulimit stack=67108864 \
-  -it zhuzilin/slime:latest /bin/bash
+  -it slimerl/slime:latest /bin/bash
 ```
 
 ### 安装 slime
@@ -129,7 +142,7 @@ CKPT_ARGS=(
    --hf-checkpoint /root/GLM-Z1-9B-0414
    # 参考模型 (Reference Model) 的 Megatron 格式检查点
    --ref-load /root/GLM-Z1-9B-0414_torch_dist
-   # Actor 模型的加载路径。若为空，则从 --ref-load 加载
+   # Actor 模型的加载路径。若为空或不存在有效的checkpoint，则从 --ref-load 加载
    --load /root/GLM-Z1-9B-0414_slime/
    # 训练过程中模型的保存路径
    --save /root/GLM-Z1-9B-0414_slime/
@@ -143,21 +156,21 @@ CKPT_ARGS=(
 整个训练流程可视为一个 **“数据采样 → 权重更新”** 的闭环。
 
 **阶段一：数据采样 (Rollout)**
-- `--rollout-batch-size`：定义每轮采样的 **Prompt 数量**  
+- `--rollout-batch-size`：定义每轮采样的 **Prompt 数量**
 - `--n-samples-per-prompt`：定义每个 Prompt 生成的 **回复数量** (用于 GRPO 类似算法)
 
 > 两者相乘，决定了 **单轮采样产生的总样本数**。
 
 **阶段二：模型训练 (Training)**
-- `--global-batch-size`：定义 **执行一次参数更新（optimizer.step）** 所需的样本量  
+- `--global-batch-size`：定义 **执行一次参数更新（optimizer.step）** 所需的样本量
 - `--num-steps-per-rollout`：定义使用当前采样数据，**总共执行多少次参数更新**  (我们默认为 1，使用 on-policy 训练)
 
-> 两者相乘，决定了 **单轮训练消耗的总样本数**。 
+> 两者相乘，决定了 **单轮训练消耗的总样本数**。
 
 > ⚠️ 这里的 **参数更新** 指训练环节的 optimizer.step()，不同于训练引擎向推理引擎发起的权重同步(Weight Sync)。
 
 在这个过程中，每轮的“产出”与“消耗”必须相等，遵循以下约束：
-**`(rollout-batch-size × n-samples-per-prompt) = (global-batch-size × num-steps-per-rollout)`** 
+**`(rollout-batch-size × n-samples-per-prompt) = (global-batch-size × num-steps-per-rollout)`**
 
 - 在 slime 中，如果设置了 `--num-steps-per-rollout` ，`--global-batch-size` 未设置则会被自动设置，设置了则会被用上述公式校验。
 
@@ -184,7 +197,7 @@ ROLLOUT_ARGS=(
    --n-samples-per-prompt 8
    --num-steps-per-rollout 1
    --global-batch-size 128
-   
+
    # Rollout 采样参数
    --rollout-max-response-len 8192
    --rollout-temperature 0.8
@@ -258,6 +271,10 @@ GRPO_ARGS=(
    --eps-clip-high 0.28
 )
 ```
+
+- `--advantage-estimator`: 除去 [GRPO](https://arxiv.org/abs/2402.03300)，slime 还支持丰富的其他训练算法，例如 [GSPO](https://arxiv.org/abs/2507.18071)、[Reinforce++](https://arxiv.org/abs/2501.03262) 与 [Reinforce++ Baseline](https://arxiv.org/abs/2501.03262)、以及 [PPO](https://arxiv.org/abs/1707.06347)；
+- `--calculate-per-token-loss`：slime 中默认的方案是 per sample loss，即 `mean(sum(sample_i) / len(sample_i))`，如果需要计算 per token loss，即 `sum(sum(sample_i)) / sum(len(sample_i))`，可以开启 `--calculate-per-token-loss`；
+- `--use-tis`：如果需要开启 TIS (Truncated Importance Sampling)，可以开启这一设置。TIS 由此[博客](https://fengyao.notion.site/off-policy-rl)介绍。
 
 ### OPTIMIZER_ARGS: 优化器参数
 
@@ -388,7 +405,7 @@ hf download Qwen/Qwen3-4B-FP8 --local-dir /root/Qwen3-4B-FP8
    # 用于加载 tokenizer 等其他信息，实际上不会使用 hf 路径中的模型权重参数
    --hf-checkpoint /root/Qwen3-4B-FP8
 
-   #  megatron checkpoint 还需要是最开始用 bf16 的 huggingface 转换的 dist 权重，不因为 FP rollout 而去做修改。
+   #  megatron checkpoint 还需要是最开始用 bf16 的 huggingface 转换的 dist 权重，不因为 FP8 rollout 而去做修改。
    --ref-load /root/Qwen3-4B_torch_dist
 ```
 
@@ -497,14 +514,14 @@ async def generate(args, sample: Sample, sampling_params) -> Sample:
             # ... tokenization and appending ...
             loss_masks += [0] * len(tool_tokens) # loss_mask = 0
             full_response += tool_output
-            
+
         elif action == "answer":
             break # 结束循环
 
     # 7. 填充并返回 Sample 对象
     sample.response = full_response
     sample.tokens = ...
-    sample.loss_masks = loss_masks
+    sample.loss_mask = loss_masks
     return sample
 ```
 

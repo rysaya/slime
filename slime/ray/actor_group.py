@@ -1,12 +1,10 @@
-from typing import Dict, Optional
 import os
-import ray
-import torch
+from typing import Optional
 
+import ray
 from ray.util.placement_group import PlacementGroup
 from ray.util.scheduling_strategies import PlacementGroupSchedulingStrategy
 
-from slime.backends.megatron_utils import MegatronTrainRayActor
 from slime.ray.utils import NOSET_VISIBLE_DEVICES_ENV_VARS_LIST
 
 
@@ -37,18 +35,14 @@ class RayTrainGroup:
         num_gpus_per_node,
         pg: tuple[PlacementGroup, list[int]],
         wandb_run_id: Optional[str] = None,
-        num_gpus_per_actor=1,
-        resources: Dict[str, float] = None,
-        num_resources_per_node: int = None,
+        num_gpus_per_actor: float = 1,
+        role: str = "actor",
     ) -> None:
         self.args = args
         self._num_nodes = num_nodes
         self._num_gpus_per_node = num_gpus_per_node
         self._wandb_run_id = wandb_run_id
-
-        # custom resources, see https://docs.ray.io/en/latest/ray-core/scheduling/resources.html
-        self._resources = resources
-        self._num_resources_per_node = num_resources_per_node
+        self.role = role
 
         # Allocate the GPUs for actors w/o instantiating them
         self._allocate_gpus_for_actor(pg, num_gpus_per_actor, wandb_run_id=wandb_run_id)
@@ -67,7 +61,7 @@ class RayTrainGroup:
             **{name: "1" for name in NOSET_VISIBLE_DEVICES_ENV_VARS_LIST},
         }
 
-        if not torch.version.hip and self.args.colocate:
+        if self.args.colocate:
             import torch_memory_saver
 
             dynlib_path = os.path.join(
@@ -80,10 +74,21 @@ class RayTrainGroup:
             env_vars["TMS_INIT_ENABLE"] = "1"
             env_vars["TMS_INIT_ENABLE_CPU_BACKUP"] = "1"
 
-        TrainRayActor = ray.remote(
-            num_gpus=1,
-            runtime_env={"env_vars": env_vars},
-        )(MegatronTrainRayActor)
+        if self.args.use_routing_replay:
+            env_vars["ENABLE_ROUTING_REPLAY"] = "1"
+
+        backend = self.args.train_backend
+        if backend == "megatron":
+            from slime.backends.megatron_utils import MegatronTrainRayActor
+
+            actor_impl = MegatronTrainRayActor
+
+        else:
+            from slime.backends.fsdp_utils import FSDPTrainRayActor
+
+            actor_impl = FSDPTrainRayActor
+
+        TrainRayActor = ray.remote(num_gpus=1, runtime_env={"env_vars": env_vars})(actor_impl)
 
         # Create worker actors
         self._actor_handlers = []
@@ -92,7 +97,6 @@ class RayTrainGroup:
             actor = TrainRayActor.options(
                 num_cpus=num_gpus_per_actor,
                 num_gpus=num_gpus_per_actor,
-                resources=self._resources,
                 scheduling_strategy=PlacementGroupSchedulingStrategy(
                     placement_group=pg,
                     placement_group_bundle_index=reordered_bundle_indices[rank],
@@ -109,36 +113,31 @@ class RayTrainGroup:
         self.args = args
         return [actor.init.remote(args, role, self._wandb_run_id, with_ref=with_ref) for actor in self._actor_handlers]
 
-    def async_init_weight_update_connections(self, rollout):
-        """
-        Connect rollout engines and actors, e.g. initialize the process group between them
-        to update weights after each training stage.
-        """
-        return [
-            actor.connect_rollout_engines.remote(
-                rollout.rollout_engines,
-                rollout.rollout_engine_lock,
-            )
-            for actor in self._actor_handlers
-        ]
-
-    def get_rollout_data(self, rollout_id):
-        ray.get([actor.get_rollout_data.remote(rollout_id) for actor in self._actor_handlers])
-
     def async_train(self, rollout_id, rollout_data_ref):
         """Do one rollout training"""
         return [actor.train.remote(rollout_id, rollout_data_ref) for actor in self._actor_handlers]
 
-    def async_save_model(self, step_id):
+    def save_model(self, step_id):
         """Save actor model on rank 0."""
-        return [actor.save_model.remote(step_id) for actor in self._actor_handlers]
+        return ray.get([actor.save_model.remote(step_id) for actor in self._actor_handlers])
 
-    def async_update_weights(self):
+    def update_weights(self):
         """Broadcast weights from rank 0 to all other ranks."""
-        return [actor.update_weights.remote() for actor in self._actor_handlers]
+        return ray.get([actor.update_weights.remote() for actor in self._actor_handlers])
 
     def async_onload(self):
         return [actor.wake_up.remote(("model")) for actor in self._actor_handlers]
 
     def async_offload(self):
         return [actor.sleep.remote(("model")) for actor in self._actor_handlers]
+
+    def connect(self, critic_group):
+        return ray.get(
+            [
+                actor.connect_actor_critic.remote((critic))
+                for actor, critic in zip(self._actor_handlers, critic_group._actor_handlers)
+            ]
+        )
+
+    def set_rollout_manager(self, rollout_manager):
+        return ray.get([actor.set_rollout_manager.remote(rollout_manager) for actor in self._actor_handlers])

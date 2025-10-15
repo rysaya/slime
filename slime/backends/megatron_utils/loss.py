@@ -5,36 +5,63 @@ from megatron.core import mpu
 
 from slime.utils.distributed_utils import distributed_masked_whiten
 from slime.utils.misc import load_function
-from .cp_utils import all_gather_with_cp, get_logits_and_tokens_offset_with_cp, get_sum_of_sample_mean
 from slime.utils.ppo_utils import (
+    calculate_log_probs_and_entropy,
     compute_approx_kl,
-    compute_entropy_from_logits,
-    compute_log_probs,
     compute_policy_loss,
+    get_advantages_and_returns,
     get_grpo_returns,
     get_reinforce_plus_plus_baseline_advantages,
     get_reinforce_plus_plus_returns,
 )
 
+from .cp_utils import all_gather_with_cp, get_logits_and_tokens_offset_with_cp, get_sum_of_sample_mean
 
-def calculate_log_probs_and_entropy(logits, tokens, with_entropy: bool = False):
-    logits = logits.contiguous()
-    # TODO: not sure why we need to clone the logits here.
-    # Without the clone, the backward will trigger inplace edit error.
-    # It seems that the function with tp will modify the logits inplace.
-    if logits.size(0) != 0:
-        log_prob = compute_log_probs(logits.clone(), tokens, mpu.get_tensor_model_parallel_group())
-    else:
-        log_prob = logits.new_zeros((0,))
 
-    if with_entropy:
-        if logits.size(0) != 0:
-            entropy = compute_entropy_from_logits(logits.clone(), mpu.get_tensor_model_parallel_group())
+def get_responses(
+    logits: torch.Tensor,
+    *,
+    args,
+    unconcat_tokens: list[torch.Tensor],
+    total_lengths: list[int],
+    response_lengths: list[int],
+):
+    assert logits.size(0) == 1, f"{logits.shape}"
+    assert logits.dtype == torch.float32, f"{logits.dtype}"
+
+    logits = logits.squeeze(0)
+    logits = logits.div(args.rollout_temperature)
+
+    cp_size = mpu.get_context_parallel_world_size()
+    end = 0
+    for tokens, total_length, response_length in zip(unconcat_tokens, total_lengths, response_lengths):
+        if cp_size == 1:
+            end += total_length
+            start = end - response_length
+            logits_chunk = logits[start - 1 : end - 1]
+            tokens_chunk = tokens[-response_length:]
         else:
-            entropy = logits.new_zeros((0,))
-    else:
-        entropy = None
-    return log_prob, entropy
+            # TODO: this is super ugly... do better abstraction.
+            chunk_size, chunks_offset, logits_offset, tokens_offset = get_logits_and_tokens_offset_with_cp(
+                total_length, response_length
+            )
+
+            logits_0, logits_1 = logits[end : end + chunk_size], logits[end + chunk_size : end + 2 * chunk_size]
+            end += 2 * chunk_size
+
+            logits_0 = logits_0[logits_offset[0][0] - chunks_offset[0][0] : logits_offset[0][1] - chunks_offset[0][0]]
+            tokens_0 = tokens[tokens_offset[0][0] : tokens_offset[0][1]]
+
+            logits_1 = logits_1[logits_offset[1][0] - chunks_offset[1][0] : logits_offset[1][1] - chunks_offset[1][0]]
+            tokens_1 = tokens[tokens_offset[1][0] : tokens_offset[1][1]]
+
+            assert logits_0.size(0) == tokens_0.size(0), f"{logits_0.size(0)} vs {tokens_0.size(0)}"
+            assert logits_1.size(0) == tokens_1.size(0), f"{logits_1.size(0)} vs {tokens_1.size(0)}"
+
+            logits_chunk = torch.cat([logits_0, logits_1], dim=0)
+            tokens_chunk = torch.cat([tokens_0, tokens_1], dim=0)
+
+        yield logits_chunk, tokens_chunk
 
 
 def get_logits(
@@ -89,62 +116,21 @@ def get_log_probs_and_entropy(
     with_entropy: bool = False,
     non_loss_data: bool = True,
 ) -> dict[str, list[torch.Tensor]]:
-    assert logits.size(0) == 1, f"{logits.shape}"
-    assert logits.dtype == torch.float32, f"{logits.dtype}"
-
-    logits = logits.squeeze(0)
-    logits = logits.div(args.rollout_temperature)
-
-    cp_size = mpu.get_context_parallel_world_size()
-
     log_probs_list = []
-    if with_entropy:
-        entropy_list = []
-    end = 0
-    for tokens, total_length, response_length in zip(unconcat_tokens, total_lengths, response_lengths):
-        if cp_size == 1:
-            end += total_length
-            start = end - response_length
-            logits_chunk = logits[start - 1 : end - 1]
-            tokens_chunk = tokens[-response_length:]
-
-            log_prob, entropy = calculate_log_probs_and_entropy(logits_chunk, tokens_chunk, with_entropy=with_entropy)
-        else:
-            # TODO: this is super ugly... do better abstraction.
-            chunk_size, chunks_offset, logits_offset, tokens_offset = get_logits_and_tokens_offset_with_cp(
-                total_length, response_length
-            )
-
-            logits_0, logits_1 = logits[end : end + chunk_size], logits[end + chunk_size : end + 2 * chunk_size]
-
-            logits_0 = logits_0[logits_offset[0][0] - chunks_offset[0][0] : logits_offset[0][1] - chunks_offset[0][0]]
-            tokens_0 = tokens[tokens_offset[0][0] : tokens_offset[0][1]]
-
-            logits_1 = logits_1[logits_offset[1][0] - chunks_offset[1][0] : logits_offset[1][1] - chunks_offset[1][0]]
-            tokens_1 = tokens[tokens_offset[1][0] : tokens_offset[1][1]]
-
-            assert logits_0.size(0) == tokens_0.size(0), f"{logits_0.size(0)} vs {tokens_0.size(0)}"
-            assert logits_1.size(0) == tokens_1.size(0), f"{logits_1.size(0)} vs {tokens_1.size(0)}"
-
-            log_prob_0, entropy_0 = calculate_log_probs_and_entropy(
-                logits_0,
-                tokens_0,
-                with_entropy=with_entropy,
-            )
-            log_prob_1, entropy_1 = calculate_log_probs_and_entropy(
-                logits_1,
-                tokens_1,
-                with_entropy=with_entropy,
-            )
-            log_prob = torch.cat([log_prob_0, log_prob_1], dim=0)
-            if with_entropy:
-                entropy = torch.cat([entropy_0, entropy_1], dim=0)
-
-            end += 2 * chunk_size
+    entropy_list = []
+    for logits_chunk, tokens_chunk in get_responses(
+        logits,
+        args=args,
+        unconcat_tokens=unconcat_tokens,
+        total_lengths=total_lengths,
+        response_lengths=response_lengths,
+    ):
+        log_prob, entropy = calculate_log_probs_and_entropy(
+            logits_chunk, tokens_chunk, mpu.get_tensor_model_parallel_group(), with_entropy=with_entropy
+        )
 
         log_probs_list.append(log_prob.squeeze(-1))
-        if with_entropy:
-            entropy_list.append(entropy)
+        entropy_list.append(entropy)
 
     res = {
         "log_probs": log_probs_list,
@@ -152,6 +138,32 @@ def get_log_probs_and_entropy(
     if with_entropy:
         res["entropy"] = entropy_list
     return res
+
+
+def get_values(
+    logits: torch.Tensor,
+    *,
+    args,
+    unconcat_tokens: list[torch.Tensor],
+    total_lengths: list[int],
+    response_lengths: list[int],
+    with_entropy: bool = False,
+    non_loss_data: bool = True,
+) -> dict[str, list[torch.Tensor]]:
+    value_list = []
+    for logits_chunk, _ in get_responses(
+        logits,
+        args=args,
+        unconcat_tokens=unconcat_tokens,
+        total_lengths=total_lengths,
+        response_lengths=response_lengths,
+    ):
+        assert logits_chunk.size(-1) == 1, f"{logits_chunk.shape}"
+        value_list.append(logits_chunk.squeeze(-1))
+
+    return {
+        "values": value_list,
+    }
 
 
 def compute_advantages_and_returns(args, rollout_data):
@@ -163,19 +175,14 @@ def compute_advantages_and_returns(args, rollout_data):
     loss_masks: list[torch.Tensor] = rollout_data.get("loss_masks", None)
     total_lengths: list[int] = rollout_data.get("total_lengths", None)
 
-    if log_probs is None:
+    # return when not the last pp stage.
+    if log_probs is None and values is None:
         return
 
-    if args.kl_coef == 0:
+    if args.kl_coef == 0 or not log_probs:
         # when kl_coef is 0, we won't compute ref_log_prob
-        kl = [
-            torch.zeros_like(
-                log_probs[i],
-                dtype=torch.float32,
-                device=log_probs[i].device,
-            )
-            for i in range(len(log_probs))
-        ]
+        xs = log_probs if log_probs is not None else values
+        kl = [torch.zeros_like(x, dtype=torch.float32, device=x.device) for x in xs]
     else:
         kl = [
             compute_approx_kl(
@@ -185,14 +192,36 @@ def compute_advantages_and_returns(args, rollout_data):
             )
             for i in range(len(log_probs))
         ]
-    rewards = torch.tensor(rewards, dtype=torch.float32, device=kl[0].device)
 
     if args.advantage_estimator in ["grpo", "gspo"]:
+        rewards = torch.tensor(rewards, dtype=torch.float32, device=kl[0].device)
         returns = get_grpo_returns(rewards, kl)
         # TODO: is the copy necessary?
         advantages = [r for r in returns]
 
+    elif args.advantage_estimator == "ppo":
+        # TODO: optimize this
+        old_rewards = rewards
+        rewards = []
+        for reward, k in zip(old_rewards, kl):
+            k *= -args.kl_coef
+            cp_rank = mpu.get_context_parallel_rank()
+            if cp_rank == 0:
+                k[-1] += reward
+            rewards.append(k)
+        advantages, returns = list(
+            zip(
+                *[
+                    get_advantages_and_returns(total_length, response_length, value, reward, args.gamma, args.lambd)
+                    for total_length, response_length, value, reward in zip(
+                        total_lengths, response_lengths, values, rewards
+                    )
+                ]
+            )
+        )
+
     elif args.advantage_estimator == "reinforce_plus_plus":
+        rewards = torch.tensor(rewards, dtype=torch.float32, device=kl[0].device)
         returns = get_reinforce_plus_plus_returns(
             rewards=rewards,
             kl=kl,
@@ -205,6 +234,7 @@ def compute_advantages_and_returns(args, rollout_data):
         advantages = [r for r in returns]
 
     elif args.advantage_estimator == "reinforce_plus_plus_baseline":
+        rewards = torch.tensor(rewards, dtype=torch.float32, device=kl[0].device)
         advantages = get_reinforce_plus_plus_baseline_advantages(
             rewards=rewards,
             kl=kl,
@@ -258,8 +288,14 @@ def compute_advantages_and_returns(args, rollout_data):
             assert (
                 all_advs.size() == all_masks.size()
             ), f"Shape mismatch before whitening: advantages {all_advs.size()}, masks {all_masks.size()}"
+            dp_group = mpu.get_data_parallel_group()
 
-            whitened_advs_flat = distributed_masked_whiten(all_advs, all_masks, shift_mean=True)
+            whitened_advs_flat = distributed_masked_whiten(
+                all_advs,
+                all_masks,
+                process_group=dp_group,
+                shift_mean=True,
+            )
             chunk_lengths = [chunk.size(0) for chunk in advantages]
             advantages = list(torch.split(whitened_advs_flat, chunk_lengths))
 
@@ -345,8 +381,6 @@ def policy_loss_function(args, batch, logits, sum_of_sample_mean):
         kl_loss = sum_of_sample_mean(kl)
 
         loss = loss + args.kl_loss_coef * kl_loss
-    else:
-        kl_loss = torch.tensor(0.0, device=log_probs.device)
 
     # make sure the gradient could backprop correctly.
     if log_probs.numel() == 0:
@@ -367,6 +401,41 @@ def policy_loss_function(args, batch, logits, sum_of_sample_mean):
         reported_loss["tis"] = sum_of_sample_mean(tis).clone().detach()
         reported_loss["ois"] = sum_of_sample_mean(ois).clone().detach()
         reported_loss["tis_clipfrac"] = sum_of_sample_mean(tis_clipfrac).clone().detach()
+
+    return loss, reported_loss
+
+
+def value_loss_function(args, batch, logits, sum_of_sample_mean):
+    old_values = torch.cat(batch["values"], dim=0)
+
+    values = get_values(
+        logits,
+        args=args,
+        unconcat_tokens=batch["unconcat_tokens"],
+        total_lengths=batch["total_lengths"],
+        response_lengths=batch["response_lengths"],
+    )
+    values = torch.cat([value.flatten() for value in values["values"]], dim=0)
+
+    returns = torch.cat(batch["returns"], dim=0)
+
+    values_clipfrac = torch.abs(values - old_values) > args.value_clip
+    values_clipped = old_values + (values - old_values).clamp(-args.value_clip, args.value_clip)
+    surr1 = (values_clipped - returns) ** 2
+    surr2 = (values - returns) ** 2
+    loss = torch.max(surr1, surr2)
+
+    loss = sum_of_sample_mean(loss)
+    values_clipfrac = sum_of_sample_mean(values_clipfrac.float())
+
+    # make sure the gradient could backprop correctly.
+    if values.numel() == 0:
+        loss += 0 * values.sum()
+
+    reported_loss = {
+        "value_loss": loss.clone().detach(),
+        "value_clipfrac": values_clipfrac.clone().detach(),
+    }
 
     return loss, reported_loss
 
@@ -449,7 +518,7 @@ def log_exp_pair_wise_loss(args, batch, logits, sum_of_sample_mean):
 
 
 def loss_function(args, batch, num_microbatches, logits):
-    num_tokens = sum(batch["response_lengths"])
+    num_tokens = sum([torch.clamp_min(loss_mask.sum(), 1) for loss_mask in batch["loss_masks"]])
     num_samples = len(batch["response_lengths"])
 
     sum_of_sample_mean = get_sum_of_sample_mean(
@@ -471,7 +540,10 @@ def loss_function(args, batch, num_microbatches, logits):
         loss, log = custom_loss_function(**loss_function_kwargs)
     else:
         if args.train_type == "rl":
-            loss, log = policy_loss_function(**loss_function_kwargs)
+            if args.loss_type == "policy_loss":
+                loss, log = policy_loss_function(**loss_function_kwargs)
+            elif args.loss_type == "value_loss":
+                loss, log = value_loss_function(**loss_function_kwargs)
         elif args.train_type == "sft":
             loss, log = sft_loss_function(**loss_function_kwargs)
         elif args.train_type == "rm":

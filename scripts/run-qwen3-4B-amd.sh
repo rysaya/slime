@@ -15,39 +15,19 @@ set -euxo pipefail
 
 
 ### AMD Support ###
-SLIME_DIR="/home/yushensu/projects/slime" # Need to change to your own path
-export SLIME_DIR=$SLIME_DIR
+SLIME_DIR="${SLIME_DIR:-/home/yushensu/projects/slime}" # Default path if not set in environment
+export SLIME_DIR
 
-MODEL_DIR="/home/yushensu/projects/model" # Need to change to your own path
-export MODEL_DIR=$MODEL_DIR
+MODEL_DIR="${MODEL_DIR:-/home/yushensu/projects/model}" # Default path if not set in environment
+export MODEL_DIR
 
-DATA_DIR="/home/yushensu/projects/data"  # Need to change to your own path
-export DATA_DIR=$DATA_DIR
+DATA_DIR="${DATA_DIR:-/home/yushensu/projects/data}"  # Default path if not set in environment
+export DATA_DIR
 
 # For AMD GPU
 export RAY_EXPERIMENTAL_NOSET_HIP_VISIBLE_DEVICES=${RAY_EXPERIMENTAL_NOSET_HIP_VISIBLE_DEVICES:-"1"} # Must set to 1
 export HIP_VISIBLE_DEVICES=${HIP_VISIBLE_DEVICES:-"0,1,2,3,4,5,6,7"} #You can choose which gpus to use
 ####################
-
-
-# ### AMD Support ### (If you do not istall, please install them)
-# # # Clone and install Megatron-LMi-amd_version
-# export MAX_JOBS=512
-# cd $SLIME_DIR
-# pip uninstall megatron-core -y
-# if [ ! -d "Megatron-LM-amd_version" ]; then
-#     git clone git@github.com:yushengsu-thu/Megatron-LM-amd_version.git
-# else
-#     echo "Megatron-LM-amd_version directory already exists, skipping clone"
-# fi
-# cd Megatron-LM-amd_version
-# pip install -vvv -e . 
-# cd $SLIME_DIR
-
-# # Install slime
-# pip install -e .
-# ####################
-
 
 
 # will prevent ray from buffering stdout/stderr
@@ -169,13 +149,13 @@ NUM_GPUS=$(echo ${HIP_VISIBLE_DEVICES} | tr ',' '\n' | wc -l)
 ray start --head --node-ip-address ${MASTER_ADDR} --num-gpus ${NUM_GPUS} --disable-usage-stats --dashboard-host=0.0.0.0 --dashboard-port=8265
 
 
-# "PYTHONPATH": "/workspace/Megatron-LM-amd_version/",
+# "PYTHONPATH": "/workspace/Megatron-LM/",
 MEGATRON_LM_PATH=$(pip list | grep megatron-core | awk '{print $NF}')
 
 ray job submit --address="http://127.0.0.1:8265" \
    --runtime-env-json='{
      "env_vars": {
-        "PYTHONPATH": "/workspace/Megatron-LM-amd_version/",
+        "PYTHONPATH": "/workspace/Megatron-LM/",
         "CUDA_DEVICE_MAX_CONNECTIONS": "1"
      }
    }' \
@@ -188,7 +168,6 @@ ray job submit --address="http://127.0.0.1:8265" \
    ${ROLLOUT_ARGS[@]} \
    ${OPTIMIZER_ARGS[@]} \
    ${GRPO_ARGS[@]} \
-   ${DISTRIBUTED_ARGS[@]} \
    ${WANDB_ARGS[@]} \
    ${PERF_ARGS[@]} \
    ${EVAL_ARGS[@]} \

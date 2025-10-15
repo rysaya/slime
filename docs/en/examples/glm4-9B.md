@@ -1,9 +1,8 @@
-# GLM4-9B
-
+# GLM4-9B with 8xH100
 
 ## Environment Setup
 
-After pulling the `zhuzilin/slime:latest` image, initialize the image environment as follows:
+After pulling the `slimerl/slime:latest` image, initialize the image environment as follows:
 
 ```bash
 cd /root/

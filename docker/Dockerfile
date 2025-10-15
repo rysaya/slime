@@ -25,20 +25,19 @@ RUN NVCC_APPEND_FLAGS="--threads 4" \
   --config-settings "--build-option=--cpp_ext --cuda_ext --parallel 8" git+https://github.com/NVIDIA/apex.git
 # transformer engine, we install with --no-deps to avoid installing torch and torch-extensions
 RUN pip install pybind11
-RUN pip -v install --no-build-isolation git+https://github.com/NVIDIA/TransformerEngine.git@stable
 # flash attn
-# the newest version megatron supports is v2.7.4.post1
+# the newest version megatron supports is v2.7.4
 RUN MAX_JOBS=64 pip -v install flash-attn==2.7.4.post1
-RUN git clone https://github.com/Dao-AILab/flash-attention.git && cd flash-attention/ && git checkout 27f501d && cd hopper/ && python setup.py install
-RUN python_path=`python -c "import site; print(site.getsitepackages()[0])"` && \
-  mkdir -p $python_path/flash_attn_3 && \
-  wget -P $python_path/flash_attn_3 https://raw.githubusercontent.com/Dao-AILab/flash-attention/27f501dbe011f4371bff938fe7e09311ab3002fa/hopper/flash_attn_interface.py
-
+RUN pip install flash-linear-attention
+RUN pip -v install --no-build-isolation transformer_engine[pytorch]
 
 WORKDIR /root/
 RUN git clone https://github.com/NVIDIA/Megatron-LM.git --recursive && \
     cd Megatron-LM && \
     pip install -e .
+
+# remove the cudnn installed by megatron
+RUN pip uninstall nvidia-cudnn-cu12 -y
 
 # sandwitch norm for GLM models
 COPY patch/${SGLANG_VERSION}/megatron.patch /root/Megatron-LM/

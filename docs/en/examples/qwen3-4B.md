@@ -1,8 +1,8 @@
-# Qwen3-4B
+# Qwen3-4B with 8xH100
 
 ## Environment Setup
 
-After pulling the `zhuzilin/slime:latest` image, initialize the image environment as follows:
+After pulling the `slimerl/slime:latest` image, initialize the image environment as follows:
 
 ```bash
 cd /root/

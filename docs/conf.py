@@ -1,6 +1,8 @@
 import os
+import shutil
 import sys
 from datetime import datetime
+from pathlib import Path
 
 sys.path.insert(0, os.path.abspath("../.."))
 
@@ -90,7 +92,7 @@ source_suffix = {
 
 master_doc = "index"
 
-language = "en"
+language = os.environ.get("SLIME_DOC_LANG", "en")
 
 exclude_patterns = ["_build", "Thumbs.db", ".DS_Store"]
 
@@ -128,10 +130,68 @@ html_context = {
 
 html_static_path = ["_static"]
 html_css_files = ["css/custom_log.css"]
+# Add custom javascript for language toggle (en <-> zh)
+html_js_files = [
+    "js/lang-toggle.js",
+]
+
+
+def _sync_examples(app):
+    """Sync top-level examples into language-specific doc trees.
+
+    Policy:
+      - README.md -> English docs/en/_examples_synced/<example>/README.md
+      - README_zh.md -> Chinese docs/zh/_examples_synced/<example>/README_zh.md
+      - If a language-specific README missing, that example is simply skipped for that language.
+    """
+    docs_root = Path(__file__).resolve().parent
+    src_dir = docs_root.parent / "examples"
+    if not src_dir.exists():
+        return
+
+    lang_cfgs = {
+        "en": {
+            "dir": docs_root / "en",
+            "readme_name": "README.md",
+        },
+        "zh": {
+            "dir": docs_root / "zh",
+            # primary preferred name; will fallback to README.md
+            "readme_name": "README_zh.md",
+        },
+    }
+
+    for lang, cfg in lang_cfgs.items():
+        lang_dir = cfg["dir"]
+        if not lang_dir.exists():
+            continue
+        out_dir = lang_dir / "_examples_synced"
+        if out_dir.exists():
+            shutil.rmtree(out_dir)
+        out_dir.mkdir(parents=True, exist_ok=True)
+
+        entries = []  # (example_name, readme_rel_path)
+        for d in sorted(src_dir.iterdir()):
+            if not d.is_dir():
+                continue
+            # language-specific selection with fallback for zh
+            if lang == "zh":
+                primary = d / cfg["readme_name"]  # README_zh.md
+                fallback = d / "README.md"
+                candidate = primary if primary.exists() else fallback
+            else:
+                candidate = d / cfg["readme_name"]
+            if not candidate.exists():
+                continue  # skip entirely if nothing suitable
+            target_dir = out_dir / d.name
+            target_dir.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(candidate, target_dir / "README.md")
+            entries.append((d.name, f"_examples_synced/{d.name}/README.md"))
 
 
 def setup(app):
-    app.add_css_file("css/custom_log.css")
+    # ensure examples are synced before reading source files
+    app.connect("builder-inited", _sync_examples)
 
 
 myst_enable_extensions = [
