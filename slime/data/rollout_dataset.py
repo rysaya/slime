@@ -1,10 +1,12 @@
 import copy
-import torch
 import json
+
 import numpy as np
+import torch
+
 from slime.data.dataset import Dataset
-from slime.utils.types import Sample, SampleStatus
 from slime.data.templates import get_chat_template
+from slime.utils.types import Sample, SampleStatus
 
 
 def convert_rl_samples_to_train(args, samples: list[Sample]):
@@ -86,12 +88,22 @@ class RolloutDataset(Dataset):
     def __init__(self, args, path):
         super().__init__(args, path)
         self.n_samples_per_prompt = self.args.n_samples_per_prompt
+        self.sample_group_index = 0
         self.init_dataset()
 
     def process_datas(self, datas):
         all_prompts = []
         for data in datas:
-            prompt = data[self.args.input_key]
+            if self.args.multimodal_keys:
+                prompt_content = []
+                if self.args.input_key in data:
+                    prompt_content.append({"type": "text", "text": data[self.args.input_key]})
+                for media_type, data_key in self.args.multimodal_keys.items():
+                    if data_key in data:
+                        media_path = data[data_key]
+                        prompt_content.append({"type": media_type, "path": media_path})
+            else:
+                prompt_content = data[self.args.input_key]
             if self.args.chat_template:
                 chat_template = get_chat_template(self.args.chat_template)
                 prompt = chat_template(prompt, self.tokenizer)
@@ -105,12 +117,17 @@ class RolloutDataset(Dataset):
                     assert isinstance(tools, list), f"tools must be a list, got {type(tools)} instead"
                 else:
                     tools = None
+                template_input = (
+                    [{"role": "user", "content": prompt_content}] if self.args.multimodal_keys else prompt_content
+                )
                 prompt = self.tokenizer.apply_chat_template(prompt, tools, tokenize=False, add_generation_prompt=True)
                 all_prompts.append(prompt)
-        all_prompt_ids = self.tokenizer(all_prompts, add_special_tokens=False)["input_ids"]
+        all_prompt_ids = self.tokenizer(
+            template_input, tools, tokenize=False, add_generation_prompt=True, add_special_tokens=False
+        )["input_ids"]
         processed_samples = []
         for prompt, prompt_id, data in zip(all_prompts, all_prompt_ids, datas):
-            if self.args.rollout_max_prompt_len is not None:
+            if self.args.rollout_max_prompt_len is not None and not self.args.multimodal_keys:
                 if len(prompt_id) > self.args.rollout_max_prompt_len:
                     continue
             processed_samples.append(
@@ -137,10 +154,12 @@ class RolloutDataset(Dataset):
             self.sample_offset = 0
         data = self.samples[self.sample_offset]
         self.sample_offset += 1
+        self.sample_group_index += 1
         data_group = []
         for _ in range(self.n_samples_per_prompt):
             sample = copy.deepcopy(data)
             sample.set_index(self.sample_index)
+            sample["sample_group_index"] = self.sample_group_index
             self.sample_index += 1
             data_group.append(sample)
         return data_group

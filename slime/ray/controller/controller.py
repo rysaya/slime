@@ -1,18 +1,19 @@
 import asyncio
 import logging
-import wandb
-import ray
 from copy import deepcopy
 from time import time
+
+import ray
+import wandb
 from tqdm import tqdm
 from transformers import AutoTokenizer
 
-from slime.rollout.sampling_params import compute_sampling_params, eval_sampling_params
 from slime.data import dummy_convert_func
-from slime.utils.misc import load_function
-from slime.utils.types import Sample
+from slime.rollout.sampling_params import compute_sampling_params, eval_sampling_params
 from slime.utils.async_utils import run
+from slime.utils.misc import load_function
 from slime.utils.ray_utils import Box
+from slime.utils.types import Sample
 from slime.utils.wandb_utils import init_wandb_secondary
 
 logging.getLogger("httpx").setLevel(logging.WARNING)
@@ -98,6 +99,7 @@ class RolloutControllerBase:
         self.dynamic_filter = (
             load_function(args.dynamic_sampling_filter_path) if args.dynamic_sampling_filter_path is not None else None
         )
+        self.metric_gatherer = _MetricGatherer()
         # TODO move all of these tag == 'train' temporarily solution outside
         self.sampling_paras = compute_sampling_params(args) if tag == "train" else eval_sampling_params(args)
         self.data_source = datasource_cls(self.args, path=args.train_files if tag == "train" else args.eval_files)
@@ -153,8 +155,13 @@ class RolloutControllerBase:
                         len(group) == self.data_source.n_samples_per_prompt
                     ), f"{self.tag}: We expect the generation per group is {self.data_source.n_samples_per_prompt}, but got {len(group)}"
                     # not pass dynamic_filter, add a new task into the queue
-                    if self.dynamic_filter is not None and not self.dynamic_filter(self.args, group):
-                        new_task_nums += 1
+                    if self.dynamic_filter is not None:
+                        dynamic_filter_output = self.dynamic_filter(self.args, group)
+                        if not dynamic_filter_output.keep:
+                            self.metric_gatherer.on_dynamic_filter_drop(reason=dynamic_filter_output.reason)
+                            new_task_nums += 1
+                        else:
+                            new_done_results.append(group)
                     else:
                         new_done_results.append(group)
 
@@ -197,3 +204,19 @@ class RolloutControllerBase:
 class RolloutController(RolloutControllerBase):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
+
+
+class _MetricGatherer:
+    def __init__(self):
+        self._dynamic_filter_drop_reason_count = defaultdict(lambda: 0)
+
+    def on_dynamic_filter_drop(self, reason: Optional[str]):
+        if not reason:
+            return
+        self._dynamic_filter_drop_reason_count[reason] += 1
+
+    def collect(self):
+        return {
+            f"rollout/dynamic_filter/drop_{reason}": count
+            for reason, count in self._dynamic_filter_drop_reason_count.items()
+        }

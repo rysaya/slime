@@ -1,18 +1,19 @@
 import asyncio
 import logging
-from pathlib import Path
 from copy import deepcopy
+from pathlib import Path
 from time import time
-from tqdm import tqdm
 
 import ray
 import torch
+from tqdm import tqdm
 
 from slime.data import dummy_convert_func
-from slime.utils.http_utils import post, get
-from slime.utils.types import Sample, GenerateState
 from slime.utils.async_utils import run
+from slime.utils.http_utils import get, post
 from slime.utils.ray_utils import Box
+from slime.utils.types import GenerateState, Sample
+
 from .controller import RolloutControllerBase, dummy_log_func
 
 logging.getLogger("httpx").setLevel(logging.WARNING)
@@ -164,15 +165,14 @@ class RolloutControllerWithBuffer(RolloutControllerBase):
 
         self.gen_state.abort()
         list_workers_resp = await get(
-            f"http://{self.args.sglang_router_ip}:{self.args.sglang_router_port}/list_workers",
-            use_http2=self.args.use_http2,
+            f"http://{self.args.sglang_router_ip}:{self.args.sglang_router_port}/list_workers"
         )
         worker_urls = list_workers_resp["urls"]
 
         # abort all the requests
         for url in worker_urls:
             print(f"{self.tag}: Abort request for {url}", flush=True)
-            await post(f"{url}/abort_request", {"abort_all": True}, use_http2=False)
+            await post(f"{url}/abort_request", {"abort_all": True})
 
         # make sure all the pending tasks are finished
         count = 0
