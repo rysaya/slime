@@ -16,7 +16,9 @@ def train(args):
     init_gen_engine = (
         args.train_type == "rl" or (args.eval_files is not None and args.eval_interval > 0)
     ) and not args.debug_train_only
-    rollout_manager, num_rollout_per_epoch = create_rollout_manager(args, pgs["rollout"], wandb_run_id=wandb_run_id, init_gen_engines=init_gen_engine)
+    rollout_manager, num_rollout_per_epoch = create_rollout_manager(
+        args, pgs["rollout"], wandb_run_id=wandb_run_id, init_gen_engines=init_gen_engine
+    )
 
     # create the actor and critic models
     actor_model, critic_model = create_training_models(args, pgs, wandb_run_id=wandb_run_id)
@@ -68,9 +70,11 @@ def train(args):
             or (num_rollout_per_epoch is not None and (rollout_id + 1) % num_rollout_per_epoch == 0)
         ):
             ray.get(
-                actor_model.async_save_model(rollout_id) + 
-                [rollout_manager.train_data_loader.save.remote(rollout_id)]
-                + critic_model.save_model(rollout_id) if args.use_critic else []
+                actor_model.async_save_model(rollout_id)
+                + [rollout_manager.train_data_loader.save.remote(rollout_id)]
+                + critic_model.save_model(rollout_id)
+                if args.use_critic
+                else []
             )
 
         need_eval = args.eval_interval > 0 and (
@@ -94,6 +98,7 @@ def train(args):
         if need_eval:
             ray.get(rollout_manager.async_eval(rollout_id))
     ray.get(rollout_manager.dispose.remote())
+
 
 if __name__ == "__main__":
     args = parse_args()
