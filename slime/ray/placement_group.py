@@ -180,6 +180,7 @@ def create_rollout_manager(args, pg, wandb_run_id):
         num_rollout_per_epoch = ray.get(rollout_manager.get_num_rollout_per_epoch.remote())
         args.num_rollout = num_rollout_per_epoch * args.num_epoch
     assert args.num_rollout > 0
+    print(f"num_rollout_per_epoch: {num_rollout_per_epoch}, Total num_rollout: {args.num_rollout}")
 
     if args.offload:
         ray.get(rollout_manager.offload.remote())
