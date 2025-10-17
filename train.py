@@ -21,12 +21,7 @@ def train(args):
     )
 
     # create the actor and critic models
-    actor_model, critic_model = create_training_models(args, pgs, wandb_run_id=wandb_run_id)
-
-    if init_gen_engine and not args.debug_rollout_only:
-        ray.get(actor_model.async_init_weight_update_connections(rollout_manager))
-
-    actor_model.set_rollout_manager(rollout_manager)
+    actor_model, critic_model = create_training_models(args, pgs, rollout_manager, wandb_run_id=wandb_run_id)
 
     if args.colocate:
         ray.get(rollout_manager.onload.remote(tags=[GPU_MEMORY_TYPE_WEIGHTS]))

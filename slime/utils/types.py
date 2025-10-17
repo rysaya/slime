@@ -1,7 +1,7 @@
 from collections import UserDict
 from dataclasses import dataclass
 from enum import Enum
-from typing import Dict, List, Union
+from typing import Any, Optional, Union
 
 import torch
 from slime.utils.misc import SingletonMeta
@@ -80,4 +80,4 @@ class ParamInfo:
 # A dict-based batch produced along the rollout -> training path
 # In Megatron backend, several fields are converted to torch.Tensor lists on GPU
 # before being consumed by data iterators (see megatron_utils.actor._get_rollout_data).
-RolloutBatch = Dict[str, Union[List[torch.Tensor], List[int], List[float], List[str]]]
+RolloutBatch = dict[str, list[torch.Tensor] | list[int] | list[float] | list[str]]
