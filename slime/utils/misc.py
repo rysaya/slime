@@ -1,5 +1,6 @@
 import importlib
 import subprocess
+from functools import lru_cache
 from typing import Optional
 
 import ray
@@ -7,6 +8,7 @@ import ray
 from slime.utils.http_utils import is_port_available
 
 
+@lru_cache(maxsize=128)
 def load_function(path):
     """
     Load a function from a module.

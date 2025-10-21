@@ -4,6 +4,7 @@ from ray.util.placement_group import placement_group
 from ray.util.scheduling_strategies import PlacementGroupSchedulingStrategy
 
 from .actor_group import RayTrainGroup
+from .rollout import RolloutManager
 
 
 @ray.remote(num_gpus=1)
@@ -153,20 +154,16 @@ def create_training_models(args, pgs, rollout_manager, wandb_run_id):
 
     actor_model.set_rollout_manager(rollout_manager)
 
-    if init_gen_engine and not args.debug_rollout_only:
-        ray.get(actor_model.async_init_weight_update_connections(rollout_manager))
-
-    if args.rollout_global_dataset:
-        ray.get(rollout_manager.load.remote(args.start_rollout_id - 1))
+    ray.get(rollout_manager.load.remote(args.start_rollout_id - 1))
 
     return actor_model, critic_model
 
 
-def create_rollout_manager(args, pg, wandb_run_id):
+def create_rollout_manager(args, pg, wandb_run_id, init_gen_engines=True):
     rollout_manager = RolloutManager.options(
         num_cpus=1,
         num_gpus=0,
-    ).remote(args, pg, wandb_run_id=wandb_run_id)
+    ).remote(args, pg, wandb_run_id=wandb_run_id, init_gen_engines=init_gen_engines)
 
     # calculate num_rollout from num_epoch
     num_rollout_per_epoch = None
@@ -176,7 +173,7 @@ def create_rollout_manager(args, pg, wandb_run_id):
     assert args.num_rollout > 0
     print(f"num_rollout_per_epoch: {num_rollout_per_epoch}, Total num_rollout: {args.num_rollout}")
 
-    if args.offload:
+    if args.colocate:
         ray.get(rollout_manager.offload.remote())
 
     return rollout_manager, num_rollout_per_epoch

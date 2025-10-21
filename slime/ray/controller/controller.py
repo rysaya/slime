@@ -1,68 +1,20 @@
 import asyncio
 import logging
+from collections import defaultdict
 from copy import deepcopy
-from time import time
+from typing import Optional
 
-import ray
-import wandb
 from tqdm import tqdm
 from transformers import AutoTokenizer
 
-from slime.data import dummy_convert_func
 from slime.rollout.sampling_params import compute_sampling_params, eval_sampling_params
 from slime.utils.async_utils import run
 from slime.utils.misc import load_function
-from slime.utils.ray_utils import Box
 from slime.utils.types import Sample
 from slime.utils.wandb_utils import init_wandb_secondary
 
 logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("httpcore").setLevel(logging.WARNING)
-
-
-def dummy_log_func(rollout_id, args, samples, rollout_time):
-    return
-
-
-def log_rollout_data(rollout_id, args, samples, rollout_time):
-    if args.load_debug_rollout_data:
-        return
-
-    log_dict = {}
-    log_dict["perf/rollout_time"] = rollout_time
-    response_lengths = [
-        sum(sample["loss_mask"]) if sample.get("loss_mask", None) is not None else sample["response_length"]
-        for sample in samples
-    ]
-    if args.rollout_num_gpus is not None:
-        log_dict["perf/tokens_per_gpu_per_sec"] = sum(response_lengths) / rollout_time / args.rollout_num_gpus
-    log_dict["perf/longest_sample_tokens_per_sec"] = max(response_lengths) / rollout_time
-    print(f"perf {rollout_id}: {log_dict}")
-    if args.use_wandb:
-        log_dict["rollout/step"] = (
-            rollout_id
-            if not args.wandb_always_use_train_step
-            else rollout_id * args.rollout_batch_size * args.n_samples_per_prompt // args.global_batch_size
-        )
-        wandb.log(log_dict)
-
-
-def log_eval_data(rollout_id, args, samples, rollout_time):
-    log_dict = {"eval/rollout_time": rollout_time}
-    for key in samples.keys():
-        for k in samples[key]:
-            val = samples[key][k]
-            if isinstance(val, list) and len(val) > 0 and isinstance(val[0], (int, float)):
-                log_dict[f"eval/{key}-{k}"] = sum(val) / len(val)
-
-    print(f"eval {rollout_id}: {log_dict}")
-    if args.use_wandb:
-        log_dict["eval/step"] = (
-            rollout_id
-            if not args.wandb_always_use_train_step
-            else rollout_id * args.rollout_batch_size * args.n_samples_per_prompt // args.global_batch_size
-        )
-        wandb.log(log_dict)
 
 
 def pop_first(args, buffer: list[list[Sample]], num_samples: int = -1) -> list[list[Sample]]:
@@ -72,7 +24,7 @@ def pop_first(args, buffer: list[list[Sample]], num_samples: int = -1) -> list[l
     return samples
 
 
-class RolloutControllerBase:
+class RolloutController:
     """The class to run rollout and convert rollout data to training data."""
 
     def __init__(
@@ -82,15 +34,11 @@ class RolloutControllerBase:
         wandb_run_id,
         datasource_cls,
         rollout_function_path,
-        post_process_func=dummy_convert_func,
-        log_func=dummy_log_func,
     ):
         self.tag = tag
         self.args = args
         init_wandb_secondary(args, wandb_run_id)
         self.generate_func = load_function(rollout_function_path)
-        self.post_process_func = post_process_func
-        self.log_func = log_func
         self.tokenizer = AutoTokenizer.from_pretrained(args.hf_checkpoint, trust_remote_code=True)
         self.semaphore = asyncio.Semaphore(
             args.sglang_server_concurrency * args.rollout_num_gpus // args.rollout_num_gpus_per_engine
@@ -109,11 +57,7 @@ class RolloutControllerBase:
         return len(self.data_source) // self.rollout_batch_size
 
     def generate(self, rollout_id):
-        start_time = time()
-        data = run(self.generate_rollout_async(rollout_id))
-        data = self.post_process_func(self.args, data)
-        self.log_func(rollout_id, self.args, data, time() - start_time)
-        return Box(ray.put(data))
+        return run(self.generate_rollout_async(rollout_id))
 
     async def generate_rollout_async(self, rollout_id: int):
         results = []
@@ -189,21 +133,13 @@ class RolloutControllerBase:
         # flatten the data if it is a list of lists
         while isinstance(results[0], list):
             results = sum(results, [])
-        return results
+        return results, self.metric_gatherer.collect()
 
     def save(self, rollout_id):
         self.data_source.save(rollout_id)
 
     def load(self, rollout_id=None):
         self.data_source.load(rollout_id)
-
-
-# ray do not support inheritance of remote classes, so we cannot add @ray.remote to RolloutControllerBase class
-# But we could make a dummy class to let it remote
-@ray.remote
-class RolloutController(RolloutControllerBase):
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
 
 
 class _MetricGatherer:

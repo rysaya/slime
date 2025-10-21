@@ -1,27 +1,18 @@
 import asyncio
 import logging
 from copy import deepcopy
-from pathlib import Path
-from time import time
-
-import ray
-import torch
 from tqdm import tqdm
 
-from slime.data import dummy_convert_func
-from slime.utils.async_utils import run
 from slime.utils.http_utils import get, post
-from slime.utils.ray_utils import Box
 from slime.utils.types import GenerateState, Sample
 
-from .controller import RolloutControllerBase, dummy_log_func
+from .controller import RolloutController
 
 logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("httpcore").setLevel(logging.WARNING)
 
 
-@ray.remote
-class RolloutControllerWithBuffer(RolloutControllerBase):
+class RolloutControllerWithBuffer(RolloutController):
     """The class to run rollout and convert rollout data to training data."""
 
     def __init__(
@@ -31,45 +22,21 @@ class RolloutControllerWithBuffer(RolloutControllerBase):
         wandb_run_id,
         datasource_cls,
         rollout_function_path,
-        post_process_func=dummy_convert_func,
-        log_func=dummy_log_func,
     ):
-        super().__init__(args, tag, wandb_run_id, datasource_cls, rollout_function_path, post_process_func, log_func)
+        super().__init__(args, tag, wandb_run_id, datasource_cls, rollout_function_path)
         self.buffer = []
         self.gen_state = GenerateState()
         assert self.args.buffer_size_frac >= 0, "buffer_size_frac must be non-negative"
         self.over_sample_batch_size = int((1 + self.args.buffer_size_frac) * self.rollout_batch_size + 0.5)
 
-    def generate(self, rollout_id):
-        start_time = time()
-        # TODO 先留你不杀
-        if self.args.load_debug_rollout_data:
-            data = torch.load(
-                open(self.args.load_debug_rollout_data.format(rollout_id=rollout_id), "rb"),
-            )["samples"]
-            data = [Sample.from_dict(sample) for sample in data]
-        else:
-            data = run(self.generate_rollout_async(rollout_id))
-
-        # TODO 先留你不杀
-        if (path_template := self.args.save_debug_rollout_data) is not None:
-            path = Path(path_template.format(rollout_id=rollout_id))
-            print(f"{self.tag}: Save debug rollout data to {path}")
-            path.parent.mkdir(parents=True, exist_ok=True)
-            torch.save([d.to_dict() for d in data], path)
-        data = self.post_process_func(self.args, data)
-        self.log_func(rollout_id, self.args, data, time() - start_time)
-        return Box(ray.put(data))
-
-    """
-    方法：
-    1. 先往生产者里塞一个rollout batch size的数据
-    2. 当一个没通过dynamatic filter，就往里面再塞一个
-    3. 如果一个pass了dynamatic filter，且buffer还没满，那就再往里面再塞一个，防止长尾半天出不来
-    4. buffer相对rollout batch size的比例通过--buffer-size-frac来调节(默认0.5)
-    """
-
     async def generate_rollout_async(self, rollout_id: int):
+        """
+        方法：
+        1. 先往生产者里塞一个rollout batch size的数据
+        2. 当一个没通过dynamatic filter，就往里面再塞一个
+        3. 如果一个pass了dynamatic filter，且buffer还没满，那就再往里面再塞一个，防止长尾半天出不来
+        4. buffer相对rollout batch size的比例通过--buffer-size-frac来调节(默认0.5)
+        """
         results = []
         sample_idx = 1
         pbar = tqdm(total=self.rollout_batch_size, desc=f"{self.tag} Rollout generation")
@@ -117,8 +84,16 @@ class RolloutControllerWithBuffer(RolloutControllerBase):
                         len(group) == self.data_source.n_samples_per_prompt
                     ), f"{self.tag}: We expect the generation per group is {self.data_source.n_samples_per_prompt}, but got {len(group)}"
                     # not pass dynamic_filter, add a new task into the queue
-                    if self.dynamic_filter is not None and not self.dynamic_filter(self.args, group):
-                        new_task_nums += 1
+                    if self.dynamic_filter is not None:
+                        dynamic_filter_output = self.dynamic_filter(self.args, group)
+                        if not dynamic_filter_output.keep:
+                            self.metric_gatherer.on_dynamic_filter_drop(reason=dynamic_filter_output.reason)
+                            new_task_nums += 1
+                        else:
+                            new_done_results.append(group)
+                            # if the buffer is expecting not full, add a new task into the queue
+                            if len(results) + len(tasks) + new_task_nums < self.over_sample_batch_size:
+                                new_task_nums += 1
                     else:
                         new_done_results.append(group)
                         # if the buffer is expecting not full, add a new task into the queue
@@ -158,7 +133,7 @@ class RolloutControllerWithBuffer(RolloutControllerBase):
         self.buffer_append(aborted_samples)
         # reset the aborted state to prevent effects on the next rollout or eval.
         self.gen_state.reset()
-        return results
+        return results, self.metric_gatherer.collect()
 
     async def abort(self, pendings, rollout_id: int):
         aborted_samples = []

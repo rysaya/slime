@@ -3,7 +3,7 @@ import multiprocessing
 import random
 import time
 from pathlib import Path
-from typing import List, Union
+from typing import List
 
 import ray
 import torch
@@ -11,13 +11,13 @@ import wandb
 from ray.util.scheduling_strategies import PlacementGroupSchedulingStrategy
 
 from slime.backends.sglang_utils.sglang_engine import SGLangEngine
-from slime.rollout.base_types import call_rollout_fn
+from slime.data import EvalDataset
+from slime.ray.controller import RolloutController, RolloutControllerWithBuffer
 from slime.utils.health_monitor import RolloutHealthMonitor
 from slime.utils.http_utils import find_available_port, get_host_info, init_http_client
 from slime.utils.metric_checker import MetricChecker
-from slime.utils.misc import load_function
 from slime.utils.ray_utils import Box
-from slime.utils.types import Sample
+from slime.utils.types import Sample, SampleStatus
 from slime.utils.wandb_utils import init_wandb_secondary
 
 from .utils import NOSET_VISIBLE_DEVICES_ENV_VARS_LIST, Lock
@@ -41,35 +41,23 @@ class RolloutManager:
         init_http_client(args)
 
         data_loader_cls = RolloutControllerWithBuffer if args.partial_rollout else RolloutController
-        dataset_cls, post_process_func = self._get_train_cls_funcs()
-        self.custom_reward_post_process_func = None
-        if self.args.custom_reward_post_process_path is not None:
-            self.custom_reward_post_process_func = load_function(self.args.custom_reward_post_process_path)
+        dataset_cls, self.post_process_func = self._get_train_cls_funcs()
 
-        self.train_data_loader = data_loader_cls.options(
-            num_cpus=1,
-            num_gpus=0,
-        ).remote(
+        self.train_data_loader = data_loader_cls(
             args,
             "train",
             wandb_run_id,
             dataset_cls,
             args.rollout_function_path,
-            post_process_func=post_process_func,
         )
         print(f"import {args.rollout_function_path} as generate_rollout function.")
         if args.eval_files is not None and args.eval_interval > 0 and not args.debug_train_only:
-            self.eval_data_loader = RolloutController.options(
-                num_cpus=1,
-                num_gpus=0,
-            ).remote(
+            self.eval_data_loader = RolloutController(
                 args,
                 "eval",
                 wandb_run_id,
                 EvalDataset,
                 args.eval_function_path,
-                post_process_func=convert_eval_samples_to_metrix,
-                log_func=log_eval_data,
             )
             print(f"import {self.args.eval_function_path} as eval_generate_rollout function.")
         else:
@@ -112,7 +100,7 @@ class RolloutManager:
             data, metrics = self._get_rollout_data(rollout_id=rollout_id)
             self._save_debug_rollout_data(data, rollout_id=rollout_id)
             _log_rollout_data(rollout_id, self.args, data, metrics, time.time() - start_time)
-            data = self._convert_samples_to_train_data(data)
+            data = self.post_process_func(data)
             return Box(ray.put(data))
         finally:
             if monitor_started:
@@ -135,25 +123,13 @@ class RolloutManager:
         else:
             raise ValueError(f"Unknown train type: {self.args.train_type}")
 
-    def async_generate(self, rollout_id):
-        return self.train_data_loader.generate.remote(rollout_id)
-
-    def async_eval(self, rollout_id):
-        if self.eval_data_loader is None:
-            return []
-        return self.eval_data_loader.generate.remote(rollout_id)
-
-    def eval(self, rollout_id):
-        if self.args.debug_train_only:
-            # if debug train only, we don't generate evaluation data
-            return
-        # TODO: add fault tolerance to eval
-        data = call_rollout_fn(
-            self.eval_generate_rollout, self.args, rollout_id, self.data_source, evaluation=True
-        ).data
-        metrics = _log_eval_rollout_data(rollout_id, self.args, data)
-        if self._metric_checker is not None:
-            self._metric_checker.on_eval(metrics)
+    def evaluation(self, rollout_id):
+        if self.eval_data_loader is not None:
+            start_time = time.time()
+            data, extra_metrix = self.eval_data_loader.generate(rollout_id)
+            metrics = _log_eval_rollout_data(rollout_id, self.args, data, extra_metrix, time.time() - start_time)
+            if self._metric_checker is not None:
+                self._metric_checker.on_eval(metrics)
 
     def save(self, rollout_id):
         self.train_data_loader.save(rollout_id)
@@ -175,11 +151,7 @@ class RolloutManager:
             data = [Sample.from_dict(sample) for sample in data]
             metrics = None
         else:
-            data = call_rollout_fn(
-                self.generate_rollout, self.args, rollout_id, self.train_data_loader, evaluation=False
-            )
-            metrics = data.metrics
-            data = data.samples
+            data, metrics = self.train_data_loader.generate(rollout_id)
             # flatten the data if it is a list of lists
             while isinstance(data[0], list):
                 data = sum(data, [])
@@ -204,83 +176,6 @@ class RolloutManager:
                 ),
                 path,
             )
-
-    def _post_process_rewards(self, samples: Union[list[Sample], list[list[Sample]]]):
-        if self.custom_reward_post_process_func is not None:
-            return self.custom_reward_post_process_func(self.args, samples)
-
-        raw_rewards = [sample.get_reward_value(self.args) for sample in samples]
-        if (
-            self.args.advantage_estimator in ["grpo", "gspo", "reinforce_plus_plus_baseline"]
-            and self.args.rewards_normalization
-        ):
-            # group norm
-            rewards = torch.tensor(raw_rewards, dtype=torch.float)
-            if rewards.shape[-1] == self.args.n_samples_per_prompt * self.args.rollout_batch_size:
-                rewards = rewards.reshape(-1, self.args.n_samples_per_prompt)
-            else:
-                # when samples count are not equal in each group
-                rewards = rewards.view(-1, rewards.shape[-1])
-            mean = rewards.mean(dim=-1, keepdim=True)
-            rewards = rewards - mean
-
-            if self.args.advantage_estimator in ["grpo", "gspo"] and self.args.grpo_std_normalization:
-                std = rewards.std(dim=-1, keepdim=True)
-                rewards = rewards / (std + 1e-6)
-
-            return raw_rewards, rewards.flatten().tolist()
-
-        return raw_rewards, raw_rewards
-
-    def _convert_samples_to_train_data(self, samples: Union[list[Sample], list[list[Sample]]]):
-        """
-        Convert inference generated samples to training data.
-        """
-        raw_rewards, rewards = self._post_process_rewards(samples)
-
-        assert len(raw_rewards) == len(samples)
-        assert len(rewards) == len(samples)
-
-        train_data = {
-            "tokens": [sample.tokens for sample in samples],
-            "response_lengths": [sample.response_length for sample in samples],
-            # some reward model, e.g. remote rm, may return multiple rewards,
-            # we could use key to select the reward.
-            "rewards": rewards,
-            "raw_reward": raw_rewards,
-            "truncated": [1 if sample.status == Sample.Status.TRUNCATED else 0 for sample in samples],
-            "sample_indices": [sample.index for sample in samples],
-        }
-
-        # loss mask
-        # TODO: compress the loss mask
-        loss_masks = []
-        for sample in samples:
-            # always instantiate loss_mask if not provided
-            if sample.loss_mask is None:
-                sample.loss_mask = [1] * sample.response_length
-            assert (
-                len(sample.loss_mask) == sample.response_length
-            ), f"loss mask length {len(sample.loss_mask)} != response length {sample.response_length}"
-            loss_masks.append(sample.loss_mask)
-        train_data["loss_masks"] = loss_masks
-
-        # overwriting the raw reward
-        if samples[0].metadata and "raw_reward" in samples[0].metadata:
-            train_data["raw_reward"] = [sample.metadata["raw_reward"] for sample in samples]
-
-        # For rollout buffer
-        if samples[0].metadata and "round_number" in samples[0].metadata:
-            train_data["round_number"] = [sample.metadata["round_number"] for sample in samples]
-
-        # Add rollout log probabilities for off-policy correction
-        if samples[0].rollout_log_probs is not None:
-            train_data["rollout_log_probs"] = [sample.rollout_log_probs for sample in samples]
-
-        if samples[0].train_metadata is not None:
-            train_data["metadata"] = [sample.train_metadata for sample in samples]
-
-        return train_data
 
 
 def init_rollout_engines(args, pg, all_rollout_engines):
@@ -474,14 +369,26 @@ def _start_router(args):
     print(f"Router launched at {args.sglang_router_ip}:{args.sglang_router_port}")
 
 
-def _log_eval_rollout_data(rollout_id, args, data):
-    log_dict = {}
-    for key in data.keys():
-        rewards = data[key]["rewards"]
-        log_dict[f"eval/{key}"] = sum(rewards) / len(rewards)
-        if "truncated" in data[key]:
-            truncated = data[key]["truncated"]
-            log_dict[f"eval/{key}-truncated_ratio"] = sum(truncated) / len(truncated)
+def _log_eval_rollout_data(rollout_id, args, samples, rollout_extra_metrics, rollout_time):
+    log_dict = {**(rollout_extra_metrics or {})}
+    log_dict["eval/rollout_time"] = rollout_time
+    eval_metrics = {}
+
+    for s in samples:
+        rwd_keys = [k for k in s.keys() if "reward" in k]
+        if s["data_source"] not in eval_metrics:
+            eval_metrics[s["data_source"]] = {"truncated": []}
+        eval_metrics[s["data_source"]]["truncated"].append(s["status"] == SampleStatus.TRUNCATED)
+        for k in rwd_keys:
+            if k not in eval_metrics[s["data_source"]]:
+                eval_metrics[s["data_source"]][k] = []
+            eval_metrics[s["data_source"]][k].append(s[k])
+
+    for key in eval_metrics.keys():
+        for k in eval_metrics[key]:
+            val = eval_metrics[key][k]
+            if isinstance(val, list) and len(val) > 0 and isinstance(val[0], (int, float)):
+                log_dict[f"eval/{key}-{k}"] = sum(val) / len(val)
 
     print(f"eval {rollout_id}: {log_dict}")
 
@@ -509,7 +416,8 @@ def _log_rollout_data(rollout_id, args, samples, rollout_extra_metrics, rollout_
 
     log_dict = {**(rollout_extra_metrics or {})}
     response_lengths = [
-        sum(sample.loss_mask) if sample.loss_mask is not None else sample.response_length for sample in samples
+        sum(sample["loss_mask"]) if sample.get("loss_mask", None) is not None else sample["response_length"]
+        for sample in samples
     ]
     log_dict["perf/rollout_time"] = rollout_time
     if args.rollout_num_gpus is not None:

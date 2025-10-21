@@ -1,9 +1,5 @@
 import asyncio
-import base64
-import io
 from copy import deepcopy
-
-from PIL import Image
 
 from slime.utils.http_utils import post
 from slime.utils.mask_utils import get_response_lengths
@@ -13,16 +9,6 @@ from slime.utils.types import GenerateState, Sample, SampleStatus
 from .rm_hub import async_rm, batched_async_rm
 
 __all__ = ["create_rollout_fn"]
-
-
-def _load_and_encode_image(path: str) -> str:
-    """Load an image from path, ensure RGB, encode as JPEG base64 string."""
-    with Image.open(path) as image:
-        buffer = io.BytesIO()
-        if image.mode != "RGB":
-            image = image.convert("RGB")
-        image.save(buffer, format="JPEG")
-        return base64.b64encode(buffer.getvalue()).decode("utf-8")
 
 
 async def generate_one_sample_vanilla(args, tokenizer, sample: Sample, raw_sampling_params) -> Sample:
@@ -35,25 +21,7 @@ async def generate_one_sample_vanilla(args, tokenizer, sample: Sample, raw_sampl
 
     # Process prompt to create text and image payload
     sampling_params = deepcopy(raw_sampling_params)
-    image_data = []
-    if isinstance(sample["prompt"], str):
-        text_prompt = sample["prompt"]
-    else:  # Multimodal prompt (list of dicts)
-        text_prompt = ""
-        # sglang uses a placeholder to insert image features
-        image_token = tokenizer.special_tokens_map.get("image_token", "<image>")
-        for part in sample["prompt"]:
-            if part["type"] == "text":
-                text_prompt += part["text"]
-            elif part["type"] == "image":
-                text_prompt += image_token
-                try:
-                    img_b64 = await asyncio.to_thread(_load_and_encode_image, part["path"])
-                    image_data.append(img_b64)
-                except Exception as e:
-                    print(f"Error processing image {part['path']}: {e}")
-                    sample["status"] = SampleStatus.ABORTED
-                    return sample
+    image_data = sample.get("image_data", [])
 
     if len(sample["response"]) > 0:
         sampling_params["max_new_tokens"] -= len(sample.get("tokens", [])) - len(sample["prompt_ids"])
@@ -77,11 +45,9 @@ async def generate_one_sample_vanilla(args, tokenizer, sample: Sample, raw_sampl
     if len(sample["response"]) > 0:
         payload["input_ids"] = sample["tokens"]
     else:
-        prompt_token_ids = tokenizer(text_prompt, add_special_tokens=False)["input_ids"]
-        payload["input_ids"] = prompt_token_ids
-        if not sample["tokens"]:  # Initialize sample.tokens for the first turn
-            sample["tokens"] = prompt_token_ids
+        payload["input_ids"] = sample["tokens"]
 
+    print(f"payload={payload}")
     output = await post(url, payload)
 
     # Extract new response tokens
@@ -89,13 +55,13 @@ async def generate_one_sample_vanilla(args, tokenizer, sample: Sample, raw_sampl
     if args.use_slime_router and "RadixTreeMiddleware" in args.slime_router_middleware_paths:
         assert not args.partial_rollout, "Currently parital rollout is not suppurted when using slime router"
         retrieve_url = f"http://{args.sglang_router_ip}:{args.sglang_router_port}/retrieve_from_text"
-        retrieve_payload = {"text": sample.prompt + output["text"], "return_logp": True}
+        retrieve_payload = {"text": sample["prompt"] + output["text"], "return_logp": True}
         retrieve_output = await post(retrieve_url, retrieve_payload)
         sample["tokens"] = retrieve_output["tokens"]
         sample["response"] += output["text"]
         sample["loss_mask"] = retrieve_output["loss_mask"]
-        sample["response_length"] = get_response_lengths([sample.loss_mask])[0]
-        sample["loss_mask"] = sample["loss_mask"][-sample.response_length :]
+        sample["response_length"] = get_response_lengths([sample["loss_mask"]])[0]
+        sample["loss_mask"] = sample["loss_mask"][-sample["response_length"] :]
         sample["rollout_log_probs"] = retrieve_output["rollout_logp"][-sample["response_length"] :]
     else:
         if "output_token_logprobs" in output["meta_info"]:
@@ -105,8 +71,8 @@ async def generate_one_sample_vanilla(args, tokenizer, sample: Sample, raw_sampl
             new_response_tokens, new_response_log_probs = [], []
 
         # Update sample with tokens directly - avoiding re-tokenization
-        sample["tokens"] = sample.tokens + new_response_tokens
-        sample["response_length"] += len(new_response_tokens)
+        sample["tokens"] = sample.get("tokens", []) + new_response_tokens
+        sample["response_length"] = sample.get("response_length", 0) + len(new_response_tokens)
         sample["response"] += output["text"]
 
         if "rollout_log_probs" not in sample:

@@ -10,7 +10,7 @@ import wandb
 from megatron.core import mpu
 from megatron.core.packed_seq_params import PackedSeqParams
 
-from slime.utils.data import get_minimum_num_micro_batch_size
+from slime.data import get_minimum_num_micro_batch_size
 from slime.utils.flops_utils import calculate_fwd_flops
 from slime.utils.seqlen_balancing import get_seqlen_balanced_partitions
 from slime.utils.timer import Timer

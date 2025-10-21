@@ -14,8 +14,8 @@ from ray.actor import ActorHandle
 from torch_memory_saver import torch_memory_saver
 from transformers import AutoConfig, AutoTokenizer
 
+from slime.data import process_rollout_data
 from slime.ray.train_actor import TrainRayActor
-from slime.utils.data import process_rollout_data
 from slime.utils.distributed_utils import get_gloo_group, init_process_group
 from slime.utils.memory_utils import clear_memory, print_memory
 from slime.utils.ray_utils import Box
@@ -68,7 +68,7 @@ class MegatronTrainRayActor(TrainRayActor):
         )
 
         if role == "critic":
-            if self.args.offload:
+            if self.args.colocate:
                 self.sleep(("model"))
             Timer().start("train_wait")
             return

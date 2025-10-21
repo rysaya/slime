@@ -150,7 +150,6 @@ async def generate_rollout_async(args, rollout_id: int, data_buffer) -> List[Lis
     """
     Simplified asynchronous rollout generation - using global continuous worker
     """
-    assert args.rollout_global_dataset
 
     # Get global worker, which will run continuously
     worker = get_global_worker(args, data_buffer)

@@ -1,20 +1,21 @@
+import base64
 import gzip
+import io
 import json
 import multiprocessing
 import os
 import random
-from typing import Union
 
 import pandas as pd
 import ray
 import torch
 import torch.distributed as dist
+from PIL import Image
 from tqdm.contrib.concurrent import process_map
 from transformers import AutoTokenizer
 
 from slime.utils.seqlen_balancing import get_seqlen_balanced_partitions
 from slime.utils.timer import Timer
-from slime.utils.types import Sample
 
 __all__ = ["Dataset"]
 
@@ -48,8 +49,14 @@ def read_file(file_name):
     return data_dict
 
 
-def dummy_convert_func(samples: Union[list[Sample], list[list[Sample]]]):
-    return samples
+def load_and_encode_image(path: str) -> str:
+    """Load an image from path, ensure RGB, encode as JPEG base64 string."""
+    with Image.open(path) as image:
+        buffer = io.BytesIO()
+        if image.mode != "RGB":
+            image = image.convert("RGB")
+        image.save(buffer, format="JPEG")
+        return base64.b64encode(buffer.getvalue()).decode("utf-8")
 
 
 def get_minimum_num_micro_batch_size(total_lengths, max_tokens_per_gpu):
@@ -184,7 +191,11 @@ class Dataset:
         all_datas = self.chunk_data(all_datas, 128)
         # use chunksize=1 but chunk datas by hand previously for batch tokenizer
         self.origin_samples = process_map(
-            self.process_datas, all_datas, max_workers=multiprocessing.cpu_count() - 8, chunksize=1
+            self.process_datas,
+            all_datas,
+            max_workers=multiprocessing.cpu_count() - 8,
+            chunksize=1,
+            desc="Processing raw datasets",
         )
         self.origin_samples = [s for sublist in self.origin_samples for s in sublist]
         self.samples = self.origin_samples

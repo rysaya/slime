@@ -21,8 +21,8 @@ else:
 
 import wandb
 
+from slime.data import get_minimum_num_micro_batch_size, process_rollout_data
 from slime.ray.train_actor import TrainRayActor
-from slime.utils.data import get_minimum_num_micro_batch_size, process_rollout_data
 from slime.utils.distributed_utils import get_gloo_group
 from slime.utils.ppo_utils import compute_approx_kl, compute_policy_loss
 from slime.utils.ray_utils import Box
@@ -86,16 +86,16 @@ class FSDPTrainRayActor(TrainRayActor):
 
         if args.optimizer == "deepspeed_cpu_adam":
             optimizer_config = {
-                'lr': args.lr,
-                'betas': (args.adam_beta1, args.adam_beta2),
-                'eps': args.adam_eps,
-                'weight_decay': args.weight_decay,
-                'adamw_mode': True,  # Use AdamW mode (decoupled weight decay)
-                'fp32_optimizer_states': True,  # Keep optimizer states in FP32
+                "lr": args.lr,
+                "betas": (args.adam_beta1, args.adam_beta2),
+                "eps": args.adam_eps,
+                "weight_decay": args.weight_decay,
+                "adamw_mode": True,  # Use AdamW mode (decoupled weight decay)
+                "fp32_optimizer_states": True,  # Keep optimizer states in FP32
             }
-            
+
             self.optimizer = FSDPCPUAdamWrapper(optimizer_config, self.model)
-            
+
         elif args.optimizer == "adam":
             self.optimizer = torch.optim.AdamW(
                 self.model.parameters(),
@@ -104,9 +104,11 @@ class FSDPTrainRayActor(TrainRayActor):
                 eps=args.adam_eps,
                 weight_decay=args.weight_decay,
             )
-            
+
         else:
-            raise ValueError(f"Unsupported optimizer: {args.optimizer}. Supported options: 'adam', 'deepspeed_cpu_adam'")
+            raise ValueError(
+                f"Unsupported optimizer: {args.optimizer}. Supported options: 'adam', 'deepspeed_cpu_adam'"
+            )
 
         # TODO: load
 
@@ -127,7 +129,7 @@ class FSDPTrainRayActor(TrainRayActor):
         # Initialize data packing parameters
         self.max_tokens_per_gpu = args.max_tokens_per_gpu  # From main arguments
 
-        if self.args.offload:
+        if self.args.colocate:
             self.sleep(("model"))
 
         Timer().start("train_wait")
@@ -149,7 +151,7 @@ class FSDPTrainRayActor(TrainRayActor):
 
         if isinstance(tags, str):
             tags = (tags,)
-        
+
         if torch_memory_saver is not None:
             torch_memory_saver.pause()
 
@@ -164,10 +166,10 @@ class FSDPTrainRayActor(TrainRayActor):
         """
         if not getattr(self.args, "offload", False):
             return
-        
+
         if isinstance(tags, str):
             tags = (tags,)
-        
+
         if torch_memory_saver is not None:
             torch_memory_saver.resume()
 
@@ -316,7 +318,7 @@ class FSDPTrainRayActor(TrainRayActor):
         """
         Timer().end("train_wait")
 
-        if self.args.offload:
+        if self.args.colocate:
             self.wake_up(("model"))
 
         world_size = dist.get_world_size()
@@ -555,8 +557,7 @@ class FSDPTrainRayActor(TrainRayActor):
             self.weight_updater.connect_rollout_engines(rollout_engines, rollout_engine_lock)
             dist.barrier(group=get_gloo_group())
 
-
-        with torch_memory_saver.disable() if self.args.offload and not torch.version.hip else nullcontext():
+        with torch_memory_saver.disable() if self.args.colocate and not torch.version.hip else nullcontext():
             self.weight_updater.update_weights()
 
     @torch.no_grad()

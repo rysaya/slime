@@ -4,8 +4,9 @@ import json
 import numpy as np
 import torch
 
-from slime.data.dataset import Dataset
+from slime.data.dataset import Dataset, load_and_encode_image
 from slime.data.templates import get_chat_template
+from slime.utils.misc import load_function
 from slime.utils.types import Sample, SampleStatus
 
 
@@ -19,6 +20,7 @@ def convert_rl_samples_to_train(args, samples: list[Sample]):
         "rewards": [sample["reward"] for sample in samples],
         "raw_reward": [sample["reward"] for sample in samples],
         "truncated": [1 if sample["status"] == SampleStatus.TRUNCATED else 0 for sample in samples],
+        "sample_indices": [sample["index"] for sample in samples],
     }
 
     # loss mask
@@ -47,7 +49,10 @@ def convert_rl_samples_to_train(args, samples: list[Sample]):
         if "reward" in k and k != "reward":
             train_data[k] = [sample[k] for sample in samples]
 
-    if args.advantage_estimator in ["grpo", "gspo", "reinforce_plus_plus_baseline"] and args.rewards_normalization:
+    if args.custom_reward_post_process_path is not None:
+        custom_reward_post_process_func = load_function(args.custom_reward_post_process_path)
+        train_data["rewards"] = custom_reward_post_process_func(rewards)
+    elif args.advantage_estimator in ["grpo", "gspo", "reinforce_plus_plus_baseline"] and args.rewards_normalization:
         # group norm
         rewards = torch.tensor([r for r in rewards], dtype=torch.float)
         if rewards.shape[-1] == args.n_samples_per_prompt * args.rollout_batch_size:
@@ -68,22 +73,6 @@ def convert_rl_samples_to_train(args, samples: list[Sample]):
     return train_data
 
 
-def convert_eval_samples_to_metrix(args, samples: list[Sample]):
-    eval_metrics = {}
-
-    for s in samples:
-        rwd_keys = [k for k in s.keys() if "reward" in k]
-        if s["data_source"] not in eval_metrics:
-            eval_metrics[s["data_source"]] = {"truncated": []}
-        eval_metrics[s["data_source"]]["truncated"].append(s["status"] == SampleStatus.TRUNCATED)
-        for k in rwd_keys:
-            if k not in eval_metrics[s["data_source"]]:
-                eval_metrics[s["data_source"]][k] = []
-            eval_metrics[s["data_source"]][k].append(s[k])
-
-    return eval_metrics
-
-
 class RolloutDataset(Dataset):
     def __init__(self, args, path):
         super().__init__(args, path)
@@ -93,7 +82,9 @@ class RolloutDataset(Dataset):
 
     def process_datas(self, datas):
         all_prompts = []
+        all_image_datas = []
         for data in datas:
+            image_data = []
             if self.args.multimodal_keys:
                 prompt_content = []
                 if self.args.input_key in data:
@@ -106,7 +97,8 @@ class RolloutDataset(Dataset):
                 prompt_content = data[self.args.input_key]
             if self.args.chat_template:
                 chat_template = get_chat_template(self.args.chat_template)
-                prompt = chat_template(prompt, self.tokenizer)
+                prompt = chat_template(prompt_content, self.tokenizer)
+                all_prompts.append(prompt)
             else:
                 if self.args.tool_key is not None:
                     tools = data[self.args.tool_key]
@@ -120,13 +112,33 @@ class RolloutDataset(Dataset):
                 template_input = (
                     [{"role": "user", "content": prompt_content}] if self.args.multimodal_keys else prompt_content
                 )
-                prompt = self.tokenizer.apply_chat_template(prompt, tools, tokenize=False, add_generation_prompt=True)
+                prompt = self.tokenizer.apply_chat_template(
+                    template_input, tools, tokenize=False, add_generation_prompt=True
+                )
+                # multimodal prompt
+                if not isinstance(prompt, str):
+                    text_prompt = ""
+                    image_token = self.tokenizer.special_tokens_map.get("image_token", "<image>")
+                    failed = False
+                    for part in prompt:
+                        if part["type"] == "text":
+                            text_prompt += part["text"]
+                        elif part["type"] == "image":
+                            text_prompt += image_token
+                            try:
+                                img_b64 = load_and_encode_image(part["path"])
+                                image_data.append(img_b64)
+                            except Exception as e:
+                                print(f"Error processing image {part['path']}: {e}")
+                                failed = True
+                                break
+                    if failed:
+                        continue
                 all_prompts.append(prompt)
-        all_prompt_ids = self.tokenizer(
-            template_input, tools, tokenize=False, add_generation_prompt=True, add_special_tokens=False
-        )["input_ids"]
+                all_image_datas.append(image_data)
+        all_prompt_ids = self.tokenizer(all_prompts, add_special_tokens=False)["input_ids"]
         processed_samples = []
-        for prompt, prompt_id, data in zip(all_prompts, all_prompt_ids, datas):
+        for prompt, prompt_id, image_data, data in zip(all_prompts, all_prompt_ids, all_image_datas, datas):
             if self.args.rollout_max_prompt_len is not None and not self.args.multimodal_keys:
                 if len(prompt_id) > self.args.rollout_max_prompt_len:
                     continue
@@ -134,7 +146,8 @@ class RolloutDataset(Dataset):
                 Sample(
                     prompt=prompt,
                     response="",
-                    prompt_ids=prompt_id,
+                    tokens=prompt_id,
+                    image_data=image_data,
                     data_source=data.get(self.args.datasource_key, data["data_path_info"]),
                     label=data[self.args.label_key] if self.args.label_key is not None else None,
                     status=SampleStatus.PENDING,
