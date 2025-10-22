@@ -1,6 +1,11 @@
 import ray
 from sglang.srt.constants import GPU_MEMORY_TYPE_KV_CACHE, GPU_MEMORY_TYPE_WEIGHTS
 
+try:
+    from sglang.srt.constants import GPU_MEMORY_TYPE_CUDA_GRAPH
+except ImportError:
+    GPU_MEMORY_TYPE_CUDA_GRAPH = None
+
 from slime.ray.placement_group import create_placement_groups, create_rollout_manager, create_training_models
 from slime.utils.arguments import parse_args
 from slime.utils.wandb_utils import init_wandb_primary
@@ -30,6 +35,8 @@ def train(args):
     actor_model.update_weights()
 
     if args.colocate:
+        if GPU_MEMORY_TYPE_CUDA_GRAPH is not None:
+            ray.get(rollout_manager.onload.remote(tags=[GPU_MEMORY_TYPE_CUDA_GRAPH]))
         ray.get(rollout_manager.onload.remote(tags=[GPU_MEMORY_TYPE_KV_CACHE]))
 
     # If not colocate, use async train to save time
@@ -88,6 +95,8 @@ def train(args):
 
         if need_on_off_switch:
             ray.get(actor_model.update_weights())
+            if GPU_MEMORY_TYPE_CUDA_GRAPH is not None:
+                ray.get(rollout_manager.onload.remote(tags=[GPU_MEMORY_TYPE_CUDA_GRAPH]))
             ray.get(rollout_manager.onload.remote(tags=[GPU_MEMORY_TYPE_KV_CACHE]))
 
         if need_eval:
