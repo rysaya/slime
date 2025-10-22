@@ -95,7 +95,7 @@ class MegatronTrainRayActor(TrainRayActor):
 
         if init_gen_engine:
             update_weight_cls = UpdateWeightFromTensor if self.args.colocate else UpdateWeightFromDistributed
-            self.weight_updator = update_weight_cls(
+            self.weight_updater = update_weight_cls(
                 self.args,
                 self.model,
                 self.weights,
@@ -112,8 +112,6 @@ class MegatronTrainRayActor(TrainRayActor):
             # recover to actor in the end.
             self.update_gpu_params_dict(self.weights["actor"])
             self.sleep(("model"))
-
-        self.rollout_engines = None
 
         self.rollout_data_postprocess = None
         if self.args.rollout_data_postprocess_path is not None:
@@ -164,7 +162,7 @@ class MegatronTrainRayActor(TrainRayActor):
             tags = (tags,)
 
         clear_memory()
-        print_memory(f"before offload model")
+        print_memory("before offload model")
         self.update_cpu_params_dict(self.weights["actor"])
         if hasattr(mpu, "destroy_process_groups"):
             mpu.destroy_process_groups()
@@ -247,9 +245,6 @@ class MegatronTrainRayActor(TrainRayActor):
 
     def train(self, rollout_id: int, rollout_data_ref: Box) -> None:
         Timer().end("train_wait")
-
-        if self.args.colocate:
-            self.wake_up(("model"))
 
         with timer("data_preprocess"):
             rollout_data = self._get_rollout_data(rollout_data_ref)
@@ -413,7 +408,10 @@ class MegatronTrainRayActor(TrainRayActor):
 
     @timer
     def update_weights(self) -> None:
-        if self.rollout_engines is None:
+        rollout_engines, rollout_engine_lock, num_new_engines = ray.get(
+            self.rollout_manager.get_rollout_engines_and_lock.remote()
+        )
+        if len(rollout_engines) == 0:
             return
 
         if not self.args.colocate:
@@ -422,9 +420,6 @@ class MegatronTrainRayActor(TrainRayActor):
         if self.args.colocate and hasattr(mpu, "reload_process_groups"):
             mpu.reload_process_groups()
 
-        rollout_engines, rollout_engine_lock, num_new_engines = ray.get(
-            self.rollout_manager.get_rollout_engines_and_lock.remote()
-        )
         if num_new_engines > 0:
             self.weight_updater.connect_rollout_engines(rollout_engines, rollout_engine_lock)
             dist.barrier(group=get_gloo_group())

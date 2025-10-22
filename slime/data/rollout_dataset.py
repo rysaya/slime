@@ -147,6 +147,7 @@ class RolloutDataset(Dataset):
                     prompt=prompt,
                     response="",
                     tokens=prompt_id,
+                    prompt_ids_len=len(prompt_id),
                     image_data=image_data,
                     data_source=data.get(self.args.datasource_key, data["data_path_info"]),
                     label=data[self.args.label_key] if self.args.label_key is not None else None,

@@ -318,9 +318,6 @@ class FSDPTrainRayActor(TrainRayActor):
         """
         Timer().end("train_wait")
 
-        if self.args.colocate:
-            self.wake_up(("model"))
-
         world_size = dist.get_world_size()
         rank = dist.get_rank()
 

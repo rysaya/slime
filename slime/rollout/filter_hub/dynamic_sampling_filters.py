@@ -7,7 +7,7 @@ __all__ = ["check_reward_nonzero_std"]
 
 
 def check_reward_nonzero_std(args, samples: list[Sample], **kwargs):
-    rewards = [sample.get_reward_value(args) for sample in samples]
+    rewards = [sample["reward"] for sample in samples]
     keep = torch.tensor(rewards, dtype=torch.float).std() > 0.0
     return DynamicFilterOutput(
         keep=keep,

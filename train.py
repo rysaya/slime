@@ -32,7 +32,7 @@ def train(args):
         ray.get(rollout_manager.onload.remote(tags=[GPU_MEMORY_TYPE_WEIGHTS]))
 
     # always update weight first so that sglang has the loaded weights from training.
-    actor_model.update_weights()
+    ray.get(actor_model.update_weights())
 
     if args.colocate:
         if GPU_MEMORY_TYPE_CUDA_GRAPH is not None:
@@ -54,7 +54,12 @@ def train(args):
             if need_on_off_switch:
                 # TODO: face OOm issue when merging these two ray get. Split them and debug later
                 ray.get(rollout_manager.offload.remote())
-                ray.get(actor_model.async_onload())
+                if args.use_critic:
+                    ray.get(critic_model.async_onload())
+                    if rollout_id >= args.num_critic_only_steps:
+                        ray.get(actor_model.async_onload())
+                else:
+                    ray.get(actor_model.async_onload())
         else:
             rollout_data_curr_ref = ray.get(rollout_data_next_future)
             if rollout_id + 1 < args.num_rollout:
@@ -74,9 +79,7 @@ def train(args):
             ray.get(
                 actor_model.async_save_model(rollout_id)
                 + [rollout_manager.train_data_loader.save.remote(rollout_id)]
-                + critic_model.save_model(rollout_id)
-                if args.use_critic
-                else []
+                + (critic_model.save_model(rollout_id) if args.use_critic else [])
             )
 
         need_eval = args.eval_interval > 0 and (
@@ -84,16 +87,16 @@ def train(args):
             or (num_rollout_per_epoch is not None and (rollout_id + 1) % num_rollout_per_epoch == 0)
         )
         need_on_off_switch = args.colocate and (not args.turn_off_train_update_weights or need_eval)
-        if args.colocate:
-            if need_on_off_switch:
-                ray.get(actor_model.async_offload())
-                if args.use_critic:
-                    ray.get(critic_model.async_offload())
-                ray.get(rollout_manager.onload.remote(tags=[GPU_MEMORY_TYPE_WEIGHTS]))
-        else:
+        if not args.colocate:
             rollout_data_next_future = ray.wait([rollout_data_next_future], num_returns=1)[0][0]
-
-        if need_on_off_switch:
+        elif need_on_off_switch:
+            if args.use_critic:
+                ray.get(critic_model.async_offload())
+                if rollout_id >= args.num_critic_only_steps:
+                    ray.get(actor_model.async_offload())
+            else:
+                ray.get(actor_model.async_offload())
+            ray.get(rollout_manager.onload.remote(tags=[GPU_MEMORY_TYPE_WEIGHTS]))
             ray.get(actor_model.update_weights())
             if GPU_MEMORY_TYPE_CUDA_GRAPH is not None:
                 ray.get(rollout_manager.onload.remote(tags=[GPU_MEMORY_TYPE_CUDA_GRAPH]))

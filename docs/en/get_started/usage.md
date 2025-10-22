@@ -240,7 +240,7 @@ slime supports customizing data generation (rollout) to various degrees.
             }
         )
 
-        prompt_tokens_ids = sample["prompt_ids"]
+        prompt_tokens_ids = sample["tokens"]
         response_token_ids = TOKENIZER(output["text"], add_special_tokens=False)["input_ids"]
 
         # set sample

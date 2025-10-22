@@ -24,11 +24,11 @@ async def generate_one_sample_vanilla(args, tokenizer, sample: Sample, raw_sampl
     image_data = sample.get("image_data", [])
 
     if len(sample["response"]) > 0:
-        sampling_params["max_new_tokens"] -= len(sample.get("tokens", [])) - len(sample["prompt_ids"])
+        sampling_params["max_new_tokens"] -= len(sample.get("tokens", [])) - sample["prompt_ids_len"]
 
     assert (
         sampling_params["max_new_tokens"] >= 0
-    ), f"max_new_tokens: {sampling_params['max_new_tokens']} should not be less than 0, len existing tokens: {len(sample.get('tokens', []))}, len prompt tokens: {len(sample['prompt_ids'])}"
+    ), f"max_new_tokens: {sampling_params['max_new_tokens']} should not be less than 0, len existing tokens: {len(sample.get('tokens', []))}, len prompt tokens: {sample['prompt_ids_len']}"
     if sampling_params["max_new_tokens"] == 0:
         sample["status"] = SampleStatus.TRUNCATED
         return sample
@@ -47,7 +47,6 @@ async def generate_one_sample_vanilla(args, tokenizer, sample: Sample, raw_sampl
     else:
         payload["input_ids"] = sample["tokens"]
 
-    print(f"payload={payload}")
     output = await post(url, payload)
 
     # Extract new response tokens
