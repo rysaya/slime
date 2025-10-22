@@ -19,6 +19,8 @@ from slime.ray.train_actor import TrainRayActor
 from slime.utils.distributed_utils import get_gloo_group, init_process_group
 from slime.utils.memory_utils import clear_memory, print_memory
 from slime.utils.ray_utils import Box
+from slime.utils.reloadable_process_group import destroy_process_groups, monkey_patch_torch_dist, reload_process_groups
+from slime.utils.routing_replay import RoutingReplay
 from slime.utils.timer import Timer, timer
 from slime.utils.types import RolloutBatch
 from slime.utils.wandb_utils import init_wandb_secondary
@@ -40,6 +42,8 @@ class MegatronTrainRayActor(TrainRayActor):
         wandb_run_id: str,
         with_ref: bool = False,
     ) -> Optional[int]:
+        monkey_patch_torch_dist()
+
         super().init(args, role, wandb_run_id, with_ref)
 
         init(args)
@@ -164,8 +168,7 @@ class MegatronTrainRayActor(TrainRayActor):
         clear_memory()
         print_memory("before offload model")
         self.update_cpu_params_dict(self.weights["actor"])
-        if hasattr(mpu, "destroy_process_groups"):
-            mpu.destroy_process_groups()
+        destroy_process_groups()
 
         torch_memory_saver.pause()
 
@@ -190,8 +193,7 @@ class MegatronTrainRayActor(TrainRayActor):
         torch_memory_saver.resume()
 
         clear_memory()
-        if hasattr(mpu, "reload_process_groups"):
-            mpu.reload_process_groups()
+        reload_process_groups()
         print_memory("after wake_up model")
 
     def _get_rollout_data(self, rollout_data_ref: Box) -> RolloutBatch:
@@ -379,8 +381,6 @@ class MegatronTrainRayActor(TrainRayActor):
             )
 
         if self.args.use_routing_replay:
-            from megatron.core.transformer.moe.moe_utils import RoutingReplay
-
             RoutingReplay.clear_all()
 
         # Why we need this? Like SFT/RM? Now use old approch
@@ -408,6 +408,9 @@ class MegatronTrainRayActor(TrainRayActor):
 
     @timer
     def update_weights(self) -> None:
+        if self.args.colocate:
+            reload_process_groups()
+
         rollout_engines, rollout_engine_lock, num_new_engines = ray.get(
             self.rollout_manager.get_rollout_engines_and_lock.remote()
         )
@@ -441,8 +444,8 @@ class MegatronTrainRayActor(TrainRayActor):
                 else:
                     self.update_cpu_params_dict(self.weights["old_actor"])
 
-        if self.args.colocate and hasattr(mpu, "destroy_process_groups"):
-            mpu.destroy_process_groups()
+        if self.args.colocate:
+            destroy_process_groups()
 
     def load_other_checkpoint(self, model_tag: str, path: str) -> None:
         old_args = self.args.load, self.args.no_load_optim, self.args.no_load_rng, self.args.finetune
